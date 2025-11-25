@@ -68,6 +68,32 @@ function buildDeltaScale(maxAbs) {
         .clamp(true);
 }
 
+function buildLcoeColorScaleFromInfo(colorInfo) {
+    if (!colorInfo) {
+        return buildLcoeScale();
+    }
+    if (colorInfo.type === 'delta') {
+        return buildDeltaScale(colorInfo.maxAbs || 1);
+    }
+    if (colorInfo.type === 'tx') {
+        return buildTxScale(colorInfo.domain);
+    }
+    return buildLcoeScale(colorInfo.domain);
+}
+
+function getLcoeColor(row, colorInfo, colorScale) {
+    if (!row || !colorInfo || !colorScale) return '#611010';
+    if (!row.meetsTarget) return '#611010';
+    if (colorInfo.type === 'delta') {
+        return Number.isFinite(row.delta) ? colorScale(row.delta) : '#611010';
+    }
+    if (colorInfo.type === 'tx') {
+        const val = row.txMetrics ? row.txMetrics.breakevenPerGwKm : 0;
+        return val > 0 ? colorScale(val) : '#611010';
+    }
+    return colorScale(row.lcoe);
+}
+
 let worldGeoJSON = null;
 
 export async function initMap(onLocationSelect) {
@@ -458,7 +484,7 @@ function roundedKey(lat, lon, decimals = 4) {
     return `${lat.toFixed(decimals)},${lon.toFixed(decimals)}`;
 }
 
-export function updatePopulationSimple(popData) {
+export function updatePopulationSimple(popData, { overlayMode = 'none', cfData = [], lcoeData = [], lcoeColorInfo = null, targetCf = null, comparisonMetric = 'lcoe' } = {}) {
     currentMode = 'population';
     lastPopulationData = popData;
     selectedMarker = null;
@@ -471,6 +497,9 @@ export function updatePopulationSimple(popData) {
 
     const popValues = popData.map(p => p.population_2020 || 0);
     const scale = buildPopulationScale(popValues);
+    const cfByCoord = new Map(cfData.map(d => [roundedKey(d.latitude, d.longitude), d]));
+    const lcoeByCoord = new Map(lcoeData.map(d => [roundedKey(d.latitude, d.longitude), d]));
+    const lcoeScale = overlayMode === 'lcoe' && lcoeColorInfo ? buildLcoeColorScaleFromInfo(lcoeColorInfo) : null;
 
     const sharedPopup = L.popup({
         closeButton: false,
@@ -479,18 +508,36 @@ export function updatePopulationSimple(popData) {
     });
 
     popData.forEach(d => {
-        const color = scale(d.population_2020 || 0);
+        const popColor = scale(d.population_2020 || 0);
+        const key = roundedKey(d.latitude, d.longitude);
+        const cfRow = cfByCoord.get(key);
+        const lcoeRow = lcoeByCoord.get(key);
 
-        L.circleMarker([d.latitude, d.longitude], {
-            radius: 0.8,
-            fillColor: color,
-            color: color,
-            weight: 0,
-            opacity: 1,
-            fillOpacity: 0.9,
-            pane: 'markers',
-            interactive: false
-        }).addTo(markersLayer);
+        // Determine overlay color and data
+        let overlayColor = null;
+        let overlayData = null;
+        if (overlayMode === 'cf' && cfRow && Number.isFinite(cfRow.annual_cf)) {
+            overlayColor = getColor(cfRow.annual_cf);
+            overlayData = cfRow;
+        } else if (overlayMode === 'lcoe' && lcoeScale && lcoeColorInfo && lcoeRow && Number.isFinite(lcoeRow.lcoe)) {
+            overlayColor = getLcoeColor(lcoeRow, lcoeColorInfo, lcoeScale);
+            overlayData = lcoeRow;
+        }
+
+        // Only show population dots when there's no overlay
+        if (overlayMode === 'none') {
+            L.circleMarker([d.latitude, d.longitude], {
+                radius: 0.8,
+                fillColor: popColor,
+                color: popColor,
+                weight: 0,
+                opacity: 1,
+                fillOpacity: 0.9,
+                pane: 'markers',
+                interactive: false
+            }).addTo(markersLayer);
+        }
+        // No dots for CF or LCOE overlays - only Voronoi cells
 
         const marker = L.circleMarker([d.latitude, d.longitude], {
             radius: 4.5,
@@ -503,9 +550,52 @@ export function updatePopulationSimple(popData) {
         });
 
         marker.on('mouseover', () => {
-            const content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
-                <div class="font-semibold">Population: ${formatNumber(d.population_2020 || 0, 0)}</div>
-             </div>`;
+            let content;
+            if (overlayMode === 'lcoe' && overlayData) {
+                const valueLine = overlayData.meetsTarget
+                    ? `LCOE: ${overlayData.lcoe ? formatCurrency(overlayData.lcoe) : '--'}/MWh`
+                    : `LCOE: ${overlayData.maxConfigLcoe ? `>${formatCurrency(overlayData.maxConfigLcoe)}` : '--'}/MWh`;
+                let infoLines = '';
+                if (overlayData.meetsTarget) {
+                    if (lcoeColorInfo?.type === 'tx' && overlayData.txMetrics) {
+                        const deltaLine = Number.isFinite(overlayData.delta)
+                            ? `<div>Cost delta vs reference: ${overlayData.delta >= 0 ? '+' : '-'}${formatCurrency(Math.abs(overlayData.delta), 2)}/MWh</div>`
+                            : '';
+                        const breakevenGw = `${formatCurrency(overlayData.txMetrics.breakevenPerGw)}/GW`;
+                        const breakevenGwKm = `${formatCurrency(overlayData.txMetrics.breakevenPerGwKm)}/GW/km`;
+                        const savingsLine = overlayData.txMetrics.savingsPerMwh > 0
+                            ? `<div>Captured savings: ${formatCurrency(overlayData.txMetrics.savingsPerMwh, 2)}/MWh @ CF ${(overlayData.annual_cf * 100).toFixed(1)}%</div>`
+                            : '';
+                        const distanceLine = Number.isFinite(overlayData.txMetrics.distanceKm)
+                            ? `<div>Approx. straight-line distance: ${formatNumber(overlayData.txMetrics.distanceKm, 0)} km</div>`
+                            : `<div>Approx. straight-line distance: --</div>`;
+                        infoLines = `${deltaLine}
+                            <div>Breakeven transmission: ${breakevenGw} (${breakevenGwKm})</div>
+                            ${savingsLine}
+                            ${distanceLine}`;
+                    } else if (lcoeColorInfo?.type === 'delta' && Number.isFinite(overlayData.delta)) {
+                        infoLines = `<div>Cost delta vs reference: ${overlayData.delta >= 0 ? '+' : '-'}${formatCurrency(Math.abs(overlayData.delta), 2)}/MWh</div>`;
+                    }
+                } else {
+                    infoLines += `<div class="text-amber-300">Target CF for 1&nbsp;GW baseload not met in this dataset.</div>`;
+                    infoLines += `<div>Highest config (${overlayData.maxConfigSolar ?? '--'} GW_DC, ${overlayData.maxConfigBatt ?? '--'} GWh)</div>`;
+                }
+                content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
+                    <div class="font-semibold">${valueLine}</div>
+                    <div>CF ${(overlayData.annual_cf * 100).toFixed(1)}% | Solar ${overlayData.solar_gw} GW_DC | Battery ${overlayData.batt_gwh} GWh</div>
+                    ${infoLines}
+                    <div class="mt-1 text-slate-400">Population: ${formatNumber(d.population_2020 || 0, 0)}</div>
+                 </div>`;
+            } else if (overlayMode === 'cf' && overlayData) {
+                content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
+                    <div class="font-semibold">CF: ${(overlayData.annual_cf * 100).toFixed(1)}%</div>
+                    <div class="mt-1 text-slate-400">Population: ${formatNumber(d.population_2020 || 0, 0)}</div>
+                 </div>`;
+            } else {
+                content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
+                    <div class="font-semibold">Population: ${formatNumber(d.population_2020 || 0, 0)}</div>
+                 </div>`;
+            }
             sharedPopup.setLatLng([d.latitude, d.longitude]).setContent(content).openOn(map);
         });
 
@@ -522,29 +612,106 @@ export function updatePopulationSimple(popData) {
 
             updateLocationPanel({
                 ...d,
-                annual_cf: 0,
-                population_2020: d.population_2020
-            }, color, 'population');
+                ...(overlayData || {}),
+                population_2020: d.population_2020,
+                targetCf,
+                comparisonMetric
+            }, overlayColor || popColor, overlayMode === 'lcoe' ? 'lcoe' : overlayMode === 'cf' ? 'capacity' : 'population');
 
             if (map.onLocationSelect) {
-                map.onLocationSelect({ ...d, population_2020: d.population_2020 }, 'population');
+                map.onLocationSelect({ ...d, ...overlayData, population_2020: d.population_2020 }, overlayMode === 'lcoe' ? 'lcoe' : overlayMode === 'cf' ? 'capacity' : 'population');
             }
         });
 
         marker.addTo(markersLayer);
     });
 
-    // render voronoi fill using population color
+    // render voronoi fill using population color, plus optional overlay
     const mapPoints = popData.map(d => {
         const point = map.latLngToLayerPoint([d.latitude, d.longitude]);
         return [point.x, point.y];
     });
-    renderVoronoi(
+
+    const overlayAccessor = (row) => {
+        const key = roundedKey(row.latitude, row.longitude);
+        if (overlayMode === 'cf') {
+            const cfRow = cfByCoord.get(key);
+            if (cfRow && Number.isFinite(cfRow.annual_cf)) return getColor(cfRow.annual_cf);
+        } else if (overlayMode === 'lcoe' && lcoeScale && lcoeColorInfo) {
+            const lRow = lcoeByCoord.get(key);
+            if (lRow && Number.isFinite(lRow.lcoe)) return getLcoeColor(lRow, lcoeColorInfo, lcoeScale);
+        }
+        return null;
+    };
+
+    renderVoronoiDual(
         mapPoints,
         popData,
         (row) => scale(row.population_2020 || 0),
-        { enableHoverSelect: false }
+        overlayMode === 'none' ? null : overlayAccessor
     );
+}
+
+function renderVoronoiDual(mapPoints, data, baseFill, overlayFill) {
+    const svg = d3.select(voronoiLayer._container);
+    svg.selectAll("*").remove();
+
+    if (mapPoints.length <= 1) return;
+
+    let path = null;
+    if (worldGeoJSON) {
+        const transform = d3.geoTransform({
+            point: function (x, y) {
+                const point = map.latLngToLayerPoint(new L.LatLng(y, x));
+                this.stream.point(point.x, point.y);
+            },
+        });
+        path = d3.geoPath().projection(transform);
+
+        svg.select("defs").remove();
+        const defs = svg.append("defs");
+        defs
+            .append("clipPath")
+            .attr("id", "clip-land")
+            .append("path")
+            .datum(worldGeoJSON)
+            .attr("d", path);
+    }
+
+    const clip = worldGeoJSON ? "url(#clip-land)" : null;
+    const size = map.getSize();
+    const buffer = Math.max(size.x, size.y);
+    const bounds = [-buffer, -buffer, size.x + buffer, size.y + buffer];
+    const delaunay = d3.Delaunay.from(mapPoints);
+    const voronoi = delaunay.voronoi(bounds);
+
+    const base = svg.append("g").attr("clip-path", clip);
+    base
+        .selectAll("path")
+        .data(data)
+        .enter()
+        .append("path")
+        .attr("d", (_, i) => voronoi.renderCell(i))
+        .attr("fill", d => baseFill ? baseFill(d) : "#111827")
+        .attr("fill-opacity", 0.85)
+        .attr("stroke", "rgba(255,255,255,0.08)")
+        .attr("stroke-width", 0.5)
+        .style("pointer-events", "none");
+
+    if (overlayFill) {
+        svg
+            .append("g")
+            .attr("clip-path", clip)
+            .selectAll("path")
+            .data(data)
+            .enter()
+            .append("path")
+            .attr("d", (_, i) => voronoi.renderCell(i))
+            .attr("fill", d => overlayFill(d) || "rgba(0,0,0,0)")
+            .attr("fill-opacity", 0.35)
+            .attr("stroke", "none")
+            .style("pointer-events", "none");
+    }
 }
 
 export function updatePopulationGeo(popData, geojson, { overlayMode = 'none', cfData = [], lcoeData = [], lcoeDomain = null } = {}) {
@@ -628,16 +795,19 @@ export function updatePopulationGeo(popData, geojson, { overlayMode = 'none', cf
                 const cfRow = key ? cfByCoord.get(key) : null;
                 const lcoeRow = key ? lcoeByCoord.get(key) : null;
                 let color = 'rgba(0,0,0,0)';
+                let hasData = false;
                 if (overlayMode === 'cf' && cfRow && Number.isFinite(cfRow.annual_cf)) {
                     color = getColor(cfRow.annual_cf);
+                    hasData = true;
                 } else if (overlayMode === 'lcoe' && lcoeScale && lcoeRow && Number.isFinite(lcoeRow.lcoe)) {
                     color = lcoeScale(lcoeRow.lcoe);
+                    hasData = true;
                 }
                 return {
-                    color,
+                    color: hasData ? color : 'rgba(0,0,0,0)',
                     weight: 0,
-                    fillColor: color,
-                    fillOpacity: 0.35
+                    fillColor: hasData ? color : 'rgba(0,0,0,0)',
+                    fillOpacity: hasData ? 0.35 : 0
                 };
             },
             interactive: false
@@ -664,14 +834,7 @@ export function updateLcoeMap(bestData, options = {}) {
     const reference = options.reference || null;
     const metricMode = options.comparisonMetric || 'lcoe';
 
-    let colorScale;
-    if (colorInfo.type === 'delta') {
-        colorScale = buildDeltaScale(colorInfo.maxAbs || 1);
-    } else if (colorInfo.type === 'tx') {
-        colorScale = buildTxScale(colorInfo.domain);
-    } else {
-        colorScale = buildLcoeScale(colorInfo.domain);
-    }
+    const colorScale = buildLcoeColorScaleFromInfo(colorInfo);
 
     const sharedPopup = L.popup({
         closeButton: false,
@@ -680,16 +843,9 @@ export function updateLcoeMap(bestData, options = {}) {
     });
 
     bestData.forEach(d => {
-        let color = '#475569';
+        let color = '#611010'; // default for missing/non-target cells (deep red)
         if (d.meetsTarget) {
-            if (colorInfo.type === 'delta') {
-                color = Number.isFinite(d.delta) ? colorScale(d.delta) : '#475569';
-            } else if (colorInfo.type === 'tx') {
-                const val = d.txMetrics ? d.txMetrics.breakevenPerGwKm : 0;
-                color = val > 0 ? colorScale(val) : '#475569';
-            } else {
-                color = colorScale(d.lcoe);
-            }
+            color = getLcoeColor(d, colorInfo, colorScale);
         }
 
         // Visual marker
@@ -785,15 +941,7 @@ export function updateLcoeMap(bestData, options = {}) {
     if (reference) {
         const refRow = bestData.find(r => r.location_id === reference.location_id);
         if (refRow) {
-            const color = refRow.meetsTarget
-                ? (colorInfo.type === 'delta'
-                    ? (Number.isFinite(refRow.delta) ? colorScale(refRow.delta) : '#475569')
-                    : colorInfo.type === 'tx'
-                        ? (refRow.txMetrics && refRow.txMetrics.breakevenPerGwKm > 0
-                            ? colorScale(refRow.txMetrics.breakevenPerGwKm)
-                            : '#475569')
-                        : colorScale(refRow.lcoe))
-                : '#475569';
+            const color = getLcoeColor(refRow, colorInfo, colorScale);
             updateLocationPanel({ ...refRow, targetCf, comparisonMetric: metricMode }, color, 'lcoe');
         }
     }
@@ -805,17 +953,7 @@ export function updateLcoeMap(bestData, options = {}) {
     renderVoronoi(
         mapPoints,
         bestData,
-        (row) => {
-            if (!row.meetsTarget) return '#475569';
-            if (colorInfo.type === 'delta') {
-                return Number.isFinite(row.delta) ? colorScale(row.delta) : '#475569';
-            }
-            if (colorInfo.type === 'tx') {
-                const val = row.txMetrics ? row.txMetrics.breakevenPerGwKm : 0;
-                return val > 0 ? colorScale(val) : '#475569';
-            }
-            return colorScale(row.lcoe);
-        },
+        (row) => getLcoeColor(row, colorInfo, colorScale),
         { enableHoverSelect: false }
     );
 }
@@ -918,11 +1056,18 @@ export function updateMapWithSampleFrame(frameData) {
     markersLayer.clearLayers();
     sampleMarkers.clear();
 
+    const samplePopup = L.popup({
+        closeButton: false,
+        autoPan: false,
+        className: 'bg-transparent border-none shadow-none'
+    });
+
     // Add markers with dominance colors
     locations.forEach(loc => {
         const color = loc.color;
 
-        const marker = L.circleMarker([loc.latitude, loc.longitude], {
+        // Visual marker (thin dot)
+        L.circleMarker([loc.latitude, loc.longitude], {
             radius: 0.8,
             fillColor: color,
             color: color,
@@ -930,14 +1075,52 @@ export function updateMapWithSampleFrame(frameData) {
             opacity: 1,
             fillOpacity: 0.9,
             pane: 'markers',
-            interactive: true,
-            className: 'transition-color'
+            interactive: false
         }).addTo(markersLayer);
-        marker.__sampleInfo = { location_id: loc.location_id, latitude: loc.latitude, longitude: loc.longitude };
-        if (sampleLocationHandler) {
-            marker.on('click', () => sampleLocationHandler({ ...marker.__sampleInfo }));
-        }
-        sampleMarkers.set(loc.location_id, marker);
+
+        // Interactive hit target for hover/click
+        const hitMarker = L.circleMarker([loc.latitude, loc.longitude], {
+            radius: 6,
+            fillColor: '#fff',
+            color: '#fff',
+            weight: 0,
+            opacity: 0,
+            fillOpacity: 0,
+            pane: 'markers'
+        });
+        hitMarker.__sampleInfo = {
+            location_id: loc.location_id,
+            latitude: loc.latitude,
+            longitude: loc.longitude,
+            solarShare: loc.solarShare ?? 0,
+            batteryShare: loc.batteryShare ?? 0,
+            otherShare: loc.otherShare ?? 0
+        };
+        hitMarker.on('mouseover', () => {
+            const info = hitMarker.__sampleInfo;
+            const solar = Number.isFinite(info.solarShare) ? (info.solarShare * 100).toFixed(1) : '--';
+            const battery = Number.isFinite(info.batteryShare) ? (info.batteryShare * 100).toFixed(1) : '--';
+            const other = Number.isFinite(info.otherShare) ? (info.otherShare * 100).toFixed(1) : '--';
+            const content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
+                    <div class="font-semibold">Generation mix</div>
+                    <div class="text-[11px] text-slate-300">Solar: ${solar}%</div>
+                    <div class="text-[11px] text-slate-300">Battery: ${battery}%</div>
+                    <div class="text-[11px] text-slate-300">Other: ${other}%</div>
+                </div>`;
+            samplePopup.setLatLng([info.latitude, info.longitude]).setContent(content).openOn(map);
+            hitMarker.setStyle({ color: '#f59e0b', weight: 2, radius: 8, opacity: 1 });
+        });
+        hitMarker.on('mouseout', () => {
+            map.closePopup(samplePopup);
+            hitMarker.setStyle({ color: '#fff', weight: 0, radius: 6, opacity: 0 });
+        });
+        hitMarker.on('click', () => {
+            if (sampleLocationHandler) {
+                sampleLocationHandler({ ...hitMarker.__sampleInfo });
+            }
+        });
+        hitMarker.addTo(markersLayer);
+        sampleMarkers.set(loc.location_id, hitMarker);
     });
 
     // Render Voronoi background

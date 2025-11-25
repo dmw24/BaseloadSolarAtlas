@@ -9,6 +9,7 @@ let currentBatt = null;
 let selectedSeason = 'spring';
 let selectedSampleLocation = null;
 let sampleChart = null;
+let hasLoadedSamples = false;
 
 function resetSampleChartState(message = 'Pick a location to view the breakdown.', clearSelection = true) {
     if (clearSelection) {
@@ -153,19 +154,18 @@ export async function loadSampleWeekData(solarGw, battGwh, summaryData) {
             weekSelect.value = desiredSeason;
         }
 
-        // Load selected week, preserving frame index
+        // Load selected week, preserving frame index if the season unchanged
         if (weekSelect.options.length > 0) {
-            currentFrameIndex = previousFrame;
-            handleWeekChange({ preserveFrame: true });
+            const shouldPreserve = hasLoadedSamples && previousSeason === desiredSeason;
+            handleWeekChange({ preserveFrame: shouldPreserve });
         }
 
         if (selectedSampleLocation && sampleChartOverlay && !sampleChartOverlay.classList.contains('hidden')) {
             renderSampleChartForSelected(false);
         }
 
-        if (wasPlaying) {
-            startPlayback();
-        }
+        startPlayback();
+        hasLoadedSamples = true;
     } catch (err) {
         console.error('Failed to load sample week data:', err);
         const reason = err?.message?.includes('Sample file not found')
@@ -195,10 +195,9 @@ function handleWeekChange({ preserveFrame = false } = {}) {
     const numFrames = seasonData.timestamps.length;
     timeScrubber.max = numFrames - 1;
 
-    if (!preserveFrame) {
-        currentFrameIndex = 0;
-    }
-    currentFrameIndex = Math.max(0, Math.min(currentFrameIndex, numFrames - 1));
+    const defaultStart = Math.floor(numFrames / 3);
+    const targetFrame = preserveFrame ? currentFrameIndex : defaultStart;
+    currentFrameIndex = Math.max(0, Math.min(targetFrame, numFrames - 1));
     timeScrubber.value = currentFrameIndex;
 
     // Render first frame
@@ -388,7 +387,10 @@ function renderFrame(season, frameIndex) {
             location_id: loc.location_id,
             latitude: loc.latitude || 0,
             longitude: loc.longitude || 0,
-            color: color
+            color: color,
+            solarShare,
+            batteryShare,
+            otherShare
         };
     });
 

@@ -56,13 +56,13 @@
                     <h2 class="text-xs font-semibold text-slate-500 uppercase tracking-wider">View Mode</h2>
                     <select id="view-mode"
                         class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm">
-                        <option value="capacity">Capacity Factor</option>
-                        <option value="samples">Sample Days</option>
-                        <option value="lcoe">LCOE Comparison</option>
-                        <option value="population">Population</option>
+                        <option value="capacity">Capacity Factor Map</option>
+                        <option value="samples">Hourly Profile Samples</option>
+                        <option value="lcoe">LCOE Map</option>
+                        <option value="population">Supply-Demand Matching</option>
                     </select>
                     <p id="view-mode-explainer" class="text-[11px] text-slate-400 leading-relaxed">
-                        Capacity Factor maps the percentage of the year this solar + storage build supplies 1&nbsp;GW baseload.
+                        Capacity Factor Map shows what share of the year this solar + storage build sustains a 1&nbsp;GW baseload.
                     </p>
                 </div>
 
@@ -98,8 +98,7 @@
                     </div>
                 </div>
             </div>
-            <p id="config-note" class="text-[11px] text-slate-400 leading-relaxed">Adjust solar (GW_DC nameplate) and storage (GWh) to test
-                how that build performs against a constant 1&nbsp;GW load across 8,760 hours.</p>
+            <p id="config-note" class="text-[11px] text-slate-400 leading-relaxed">Adjust solar (GW_DC nameplate) and storage (GWh) to test how the selected build can meet a constant 1&nbsp;GW baseload demand (1,000&nbsp;MW) supplied by your solar + battery configuration across 8,760 hours.</p>
 
                 <!-- LCOE Controls -->
                 <div id="lcoe-controls" class="hidden space-y-4 p-4 rounded-xl bg-slate-900/60 border border-slate-800">
@@ -184,31 +183,45 @@
 
                 <!-- Stats (Capacity view only) -->
                 <div id="stats-section" class="p-4 rounded-xl bg-slate-800/50 border border-slate-700/50 space-y-3">
-                    <h3 class="text-xs font-semibold text-slate-400 uppercase">Global Stats</h3>
-                    <div class="grid grid-cols-2 gap-4">
-                        <div>
-                            <div class="text-xs text-slate-500">Avg CF</div>
-                            <div class="text-xl font-mono text-white" id="stat-avg-cf">--%</div>
+                    <div id="stats-metrics" class="space-y-3">
+                        <h3 class="text-xs font-semibold text-slate-400 uppercase">Global Stats</h3>
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <div class="text-xs text-slate-500">Avg CF</div>
+                                <div class="text-xl font-mono text-white" id="stat-avg-cf">--%</div>
+                            </div>
+                            <div>
+                                <div class="text-xs text-slate-500">Best CF</div>
+                                <div class="text-xl font-mono text-emerald-400" id="stat-max-cf">--%</div>
+                            </div>
                         </div>
-                        <div>
-                            <div class="text-xs text-slate-500">Best CF</div>
-                            <div class="text-xl font-mono text-emerald-400" id="stat-max-cf">--%</div>
-                        </div>
+                        <p class="text-[11px] text-slate-400">Values summarize what share of the year the current build keeps
+                            1&nbsp;GW load supplied.</p>
                     </div>
-                    <p class="text-[11px] text-slate-400">Values summarize what share of the year the current build keeps
-                        1&nbsp;GW load supplied.</p>
                     <div id="population-toggle" class="hidden pt-2 border-t border-slate-700/60">
-                        <div class="space-y-2">
-                            <label class="text-xs text-slate-400">Overlay on population</label>
-                            <select id="population-overlay-mode" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm">
-                                <option value="none">Population only</option>
-                                <option value="cf">Capacity factor overlay</option>
-                                <option value="lcoe">LCOE overlay</option>
-                            </select>
+                        <p id="population-overlay-helper" class="text-[11px] text-slate-400 mb-3 leading-relaxed">
+                            Population is always shown as the base layer; choose which metric determines the colour of each cell.
+                        </p>
+                        <div id="population-overlay-select-wrapper" class="space-y-2">
+                            <label class="text-xs text-slate-400 mb-1">Display data</label>
+                            <div id="population-overlay-mode" class="grid grid-cols-3 rounded-lg bg-slate-800 border border-slate-700 overflow-hidden text-sm">
+                                <button data-overlay="none" class="px-2 py-2 text-center font-semibold bg-slate-700 text-slate-100">Population</button>
+                                <button data-overlay="cf" class="px-2 py-2 text-center font-semibold text-slate-300 hover:bg-slate-700/60">CF</button>
+                                <button data-overlay="lcoe" class="px-2 py-2 text-center font-semibold text-slate-300 hover:bg-slate-700/60">LCOE</button>
+                            </div>
+                        </div>
+                        <div class="mt-4">
+                            <div class="text-xs text-slate-400 mb-1">View mode</div>
+                            <div id="population-display-toggle" class="grid grid-cols-2 rounded-lg bg-slate-800 border border-slate-700 overflow-hidden text-sm">
+                                <button data-mode="map" class="px-3 py-2 text-center font-semibold bg-slate-700 text-slate-100">Map</button>
+                                <button data-mode="charts" class="px-3 py-2 text-center font-semibold text-slate-300 hover:bg-slate-700/60">Charts</button>
+                            </div>
+                            <p id="population-view-helper" class="text-[11px] text-slate-500 mt-2">Map mode shows every cell on the globe; Charts condense the same information by population percentile and latitude band.</p>
+                            <button id="population-charts-cta" type="button" class="mt-2 text-[11px] w-full text-center text-sky-300 hover:text-sky-200 font-semibold">Switch between map and charts</button>
                         </div>
                         <div id="population-overlay-config" class="hidden space-y-4 mt-4 p-3 rounded-lg bg-slate-900/40 border border-slate-800/60">
                             <p class="text-[11px] text-slate-400 leading-relaxed">
-                                Tune solar and storage to recompute the capacity-factor overlay for this build.
+                                Tune solar and storage to recompute the capacity-factor map for this build.
                             </p>
                             <div class="space-y-2">
                                 <div class="flex justify-between text-xs text-slate-400">
@@ -227,10 +240,13 @@
                                     class="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500">
                             </div>
                         </div>
+                        <div id="population-lcoe-controls-wrapper" class="hidden mt-4">
+                            <!-- LCOE controls will be shown here when LCOE overlay is active -->
+                        </div>
                     </div>
                 </div>
 
-                <!-- Sample Days Controls (Sample view only) -->
+                <!-- Hourly Profile Samples Controls (samples view only) -->
                 <div id="sample-controls" class="hidden space-y-4">
                     <div class="space-y-2">
                         <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Select Week</label>
@@ -269,21 +285,6 @@
                         deficit, and logs any remaining gap as unserved energy.</p>
                 </div>
 
-                <!-- Selected Location (Capacity view only) -->
-                <div id="location-panel" class="hidden space-y-4 pt-4 border-t border-slate-800">
-                    <h2 class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Selected Location</h2>
-                    <div class="text-sm font-mono text-slate-300" id="loc-coords">--</div>
-                    <div class="text-3xl font-bold text-white" id="loc-value">--%</div>
-                    <div class="text-xs text-slate-500" id="loc-label">Annual Capacity Factor</div>
-                    <p class="text-[11px] text-slate-500">Capacity factor indicates the share of the year this configuration meets 1&nbsp;GW baseload.</p>
-                    <div class="text-xs text-slate-400 hidden space-y-1" id="loc-config">
-                        <div id="loc-config-text">--</div>
-                        <div class="text-[11px] text-slate-500 hidden" id="loc-tx-info">Transmission breakeven:
-                            <span id="loc-tx-mwh">--</span>,
-                            <span id="loc-tx-gwkm">--</span></div>
-                    </div>
-                </div>
-
             </div>
         </aside>
 
@@ -292,6 +293,49 @@
 
             <!-- Map -->
             <div id="map" class="flex-1 bg-slate-950 z-0"></div>
+            <div id="population-charts" class="hidden flex-1 overflow-y-auto px-6 py-5 bg-slate-950">
+                <div class="w-full max-w-6xl mx-auto space-y-4">
+                    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 bg-slate-900/70 border border-slate-800 rounded-xl p-4">
+                        <div>
+                            <h3 class="text-sm font-semibold text-slate-100">Metric view</h3>
+                            <p class="text-[11px] text-slate-400">Choose which metric the charts summarize; you can still adjust the solar and storage controls in the sidebar.</p>
+                        </div>
+                        <div id="population-chart-metric-toggle" class="grid grid-cols-2 rounded-lg bg-slate-800 border border-slate-700 overflow-hidden text-sm">
+                            <button data-metric="cf" class="px-3 py-2 text-center font-semibold bg-slate-700 text-slate-100">Capacity factor</button>
+                            <button data-metric="lcoe" class="px-3 py-2 text-center font-semibold text-slate-300 hover:bg-slate-700/60">LCOE</button>
+                        </div>
+                    </div>
+                    <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 shadow-xl">
+                        <div class="flex items-center justify-between mb-3">
+                            <h3 class="text-sm font-semibold text-slate-100">Metric by population percentile</h3>
+                            <div class="text-[11px] text-slate-500" id="population-chart-histogram-label">Capacity factor (%) across population percentiles</div>
+                        </div>
+                        <div class="h-52">
+                            <canvas id="population-chart-histogram"></canvas>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 shadow-xl">
+                            <div class="flex items-center justify-between mb-3">
+                                <h3 class="text-sm font-semibold text-slate-100">Metric by latitude (CF or LCOE)</h3>
+                                <div class="text-[11px] text-slate-500" id="population-chart-metric-label">Capacity factor (%) vs latitude</div>
+                            </div>
+                            <div class="h-64">
+                                <canvas id="population-chart-lat-metric"></canvas>
+                            </div>
+                        </div>
+                        <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 shadow-xl">
+                            <div class="flex items-center justify-between mb-3">
+                                <h3 class="text-sm font-semibold text-slate-100">Population share by latitude</h3>
+                                <div class="text-[11px] text-slate-500">Each bar = % of global population in that latitude band</div>
+                            </div>
+                            <div class="h-64">
+                                <canvas id="population-chart-lat-pop"></canvas>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
             <div id="sample-chart-overlay"
                 class="hidden absolute inset-x-6 bottom-6 z-50 bg-slate-900/95 border border-slate-700 rounded-2xl shadow-2xl p-5">
                 <div class="flex items-start justify-between gap-3 mb-3">
@@ -343,20 +387,24 @@
                     <span id="legend-pop-min">0</span>
                     <span id="legend-pop-max">--</span>
                 </div>
-                <div class="text-[11px] text-slate-400 mt-2">Use overlay to view capacity factor or LCOE colors on top of population.</div>
+                <div class="text-[11px] text-slate-400 mt-2 space-y-1">
+                    <div>Base: population density (darker = denser).</div>
+                    <div id="legend-pop-layer-note" class="text-slate-300">Color: capacity factor map.</div>
+                </div>
             </div>
 
                 <div id="legend-lcoe"
                 class="hidden absolute bottom-8 right-8 bg-slate-900/90 backdrop-blur p-4 rounded-xl border border-slate-800 z-[400] shadow-2xl">
                 <div id="legend-lcoe-title" class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">LCOE ($/MWh)</div>
-                <div class="w-full space-y-2 mb-2" id="legend-lcoe-scale">
-                    <div id="legend-lcoe-bar" class="h-3 rounded-full legend-gradient-cost w-full"></div>
-                    <div class="flex justify-between text-[10px] font-mono text-slate-500 w-full">
-                        <span id="legend-lcoe-min">--</span>
-                        <span id="legend-lcoe-mid">--</span>
-                        <span id="legend-lcoe-max">--</span>
+                    <div class="w-full space-y-2 mb-2" id="legend-lcoe-scale">
+                        <div id="legend-lcoe-bar" class="h-3 rounded-full legend-gradient-cost w-full"></div>
+                        <div class="flex justify-between text-[10px] font-mono text-slate-500 w-full">
+                            <span id="legend-lcoe-min">--</span>
+                            <span id="legend-lcoe-mid">--</span>
+                            <span id="legend-lcoe-max">--</span>
+                        </div>
+                        <div class="flex items-center gap-2 text-[10px] text-slate-400" id="legend-lcoe-no-data"></div>
                     </div>
-                </div>
                     <div class="space-y-2">
                         <div class="text-[11px] text-slate-400" id="legend-lcoe-ref">Reference: --</div>
                         <div id="comparison-toggle" class="hidden text-[11px]">
@@ -372,7 +420,7 @@
                             <div class="text-[10px] text-slate-500">Breakeven cost assumes straight-line distance (not actual corridors), 50-year life, 6% WACC.</div>
                         </div>
                         <div class="flex items-center justify-between gap-2">
-                            <div class="text-[10px] text-slate-500">Grey cells fall short of the target CF. Green indicates better economics vs the reference; red indicates worse.</div>
+                            <div class="text-[10px] text-slate-500">Dark red areas fall short of the target CF or lack data. Green indicates better economics vs the reference; red indicates worse.</div>
                             <div class="flex gap-2">
                                 <button id="legend-lock-btn"
                                     class="hidden text-[11px] px-2 py-1 bg-slate-800 border border-slate-700 rounded text-slate-200 hover:bg-slate-700">Fix
@@ -453,13 +501,14 @@
 
             <section class="space-y-2 text-sm leading-relaxed">
                 <h3 class="text-sky-300 font-semibold text-sm uppercase tracking-wide">View modes</h3>
-                <ul class="list-disc list-inside text-slate-300 space-y-1">
-                    <li><strong>Capacity Factor:</strong> Heat map of CF across all simulated locations for the selected
+                    <ul class="list-disc list-inside text-slate-300 space-y-1">
+                    <li><strong>Capacity Factor Map:</strong> Heat map of CF across all simulated locations for the selected
                         solar + battery pair.</li>
-                    <li><strong>Sample Days:</strong> A representative 168-hour week that visualizes solar, battery
+                    <li><strong>Hourly Profile Samples:</strong> A representative 168-hour week that visualizes solar, battery
                         discharge, state-of-charge, and any unserved energy.</li>
-                    <li><strong>LCOE Comparison:</strong> Chooses the cheapest configuration per location that meets the
+                    <li><strong>LCOE Map:</strong> Chooses the cheapest configuration per location that meets the
                         target CF. Click any cell to set it as the cost reference and unlock transmission deltas.</li>
+                    <li><strong>Supply-Demand Matching:</strong> Population density maps where consumer demand actually is, so the combined view links that demand with the performance or cost of each location; Charts keep the same metric summaries by population percentile and latitude buckets while you tune the sliders or selector without leaving the tab.</li>
                 </ul>
             </section>
 
@@ -468,6 +517,16 @@
                 <p>The atlas is meant for directional planning. It does not model grid constraints, curtailment pricing,
                     or multi-day reliability events beyond the provided sample weeks. Treat the outputs as a fast sanity
                     check before diving into detailed production-cost or capacity-expansion studies.</p>
+            </section>
+
+            <section class="space-y-2 text-sm leading-relaxed">
+                <h3 class="text-sky-300 font-semibold text-sm uppercase tracking-wide">Sources</h3>
+                <p class="text-slate-300">
+                    Solar irradiance and energy generation profiles are derived from <a href="https://power.larc.nasa.gov" class="text-sky-400 underline">NASA/POWER Project (Surface meteorology and Solar Energy)</a>,
+                    queried for each sampled location and resampled to the hourly baseload simulation. Population totals use
+                    the <a href="https://sedac.ciesin.columbia.edu/data/collection/gpw-v4" class="text-sky-400 underline">Gridded Population of the World, Version 4 (GPWv4)</a>
+                    2020 population count raster by NASA SEDAC.
+                </p>
             </section>
         </div>
     </div>

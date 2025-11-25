@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Baseload Solar Atlas</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="css/style.css">
+
+    <!-- Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+</head>
+
+<body class="bg-slate-950 text-slate-200 font-inter h-screen flex flex-col overflow-hidden">
+
+    <!-- Header -->
+    <header
+        class="h-16 border-b border-slate-800 bg-slate-900/50 backdrop-blur flex items-center px-6 justify-between shrink-0 z-20">
+        <div class="flex items-center gap-3">
+            <div
+                class="w-8 h-8 rounded-lg bg-gradient-to-br from-amber-400 to-orange-600 flex items-center justify-center shadow-lg shadow-orange-500/20">
+                <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                        d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                </svg>
+            </div>
+            <h1 class="font-semibold text-lg tracking-tight text-white">Baseload Solar Atlas</h1>
+        </div>
+        <div class="flex items-center gap-2">
+            <button id="info-toggle" type="button"
+                class="px-3 py-1 text-xs font-semibold rounded-lg border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700 focus:outline-none focus:ring focus:ring-amber-500/30">
+                Info
+            </button>
+            <div class="text-xs text-slate-500 font-mono">Created by Daan Walter, 2025</div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex overflow-hidden">
+
+        <!-- Sidebar Controls -->
+        <aside class="w-80 bg-slate-900 border-r border-slate-800 flex flex-col shrink-0 z-10">
+            <div class="p-6 space-y-8 overflow-y-auto flex-1">
+
+                <!-- View Mode Selector -->
+                <div class="space-y-3">
+                    <h2 class="text-xs font-semibold text-slate-500 uppercase tracking-wider">View Mode</h2>
+                    <select id="view-mode"
+                        class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm">
+                        <option value="capacity">Capacity Factor</option>
+                        <option value="samples">Sample Days</option>
+                        <option value="lcoe">LCOE Comparison</option>
+                        <option value="population">Population</option>
+                    </select>
+                    <p id="view-mode-explainer" class="text-[11px] text-slate-400 leading-relaxed">
+                        Capacity Factor maps the percentage of the year this solar + storage build supplies 1&nbsp;GW baseload.
+                    </p>
+                </div>
+
+                <!-- Configuration (both modes) -->
+                <div id="system-config" class="space-y-4">
+                    <h2 class="text-xs font-semibold text-slate-500 uppercase tracking-wider">System Configuration</h2>
+
+                    <!-- Solar Slider -->
+                    <div class="space-y-2">
+                    <div class="flex justify-between text-sm">
+                        <span class="text-slate-300">Solar Capacity</span>
+                        <span class="font-mono text-amber-400"><span id="solar-val">5</span> GW_DC</span>
+                    </div>
+                    <input type="range" id="solar-slider" min="1" max="20" step="1" value="5"
+                        class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500">
+                    <div class="flex justify-between text-xs text-slate-500">
+                        <span>1 GW_DC</span>
+                        <span>20 GW_DC</span>
+                    </div>
+                </div>
+
+                <!-- Battery Slider -->
+                <div class="space-y-2">
+                    <div class="flex justify-between text-sm">
+                        <span class="text-slate-300">Battery Capacity</span>
+                        <span class="font-mono text-cyan-400"><span id="batt-val">8</span> GWh</span>
+                    </div>
+                    <input type="range" id="batt-slider" min="0" max="36" step="2" value="8"
+                        class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500">
+                    <div class="flex justify-between text-xs text-slate-500">
+                        <span>0 GWh</span>
+                        <span>36 GWh</span>
+                    </div>
+                </div>
+            </div>
+            <p id="config-note" class="text-[11px] text-slate-400 leading-relaxed">Adjust solar (GW_DC nameplate) and storage (GWh) to test
+                how that build performs against a constant 1&nbsp;GW load across 8,760 hours.</p>
+
+                <!-- LCOE Controls -->
+                <div id="lcoe-controls" class="hidden space-y-4 p-4 rounded-xl bg-slate-900/60 border border-slate-800">
+                    <div class="flex items-center justify-between">
+                        <h2 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">LCOE Inputs</h2>
+                        <span class="text-[10px] text-slate-500">($ / MWh output)</span>
+                    </div>
+
+                    <div class="space-y-2">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-slate-300">Target Capacity Factor</span>
+                            <span class="font-mono text-emerald-400"><span id="target-cf-val">90</span>%</span>
+                        </div>
+                        <input type="range" id="target-cf-slider" min="50" max="100" step="1" value="90"
+                            class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-emerald-500">
+                        <div class="flex justify-between text-xs text-slate-500">
+                            <span>50%</span>
+                            <span>100%</span>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3 text-sm">
+                        <label class="space-y-1">
+                            <span class="text-slate-400 text-xs uppercase tracking-wider">Solar Capex</span>
+                            <input id="solar-capex" type="number" min="0" step="25" value="600"
+                                class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-200"
+                                aria-label="Solar Capex ($/kW_DC)" />
+                            <span class="text-[11px] text-slate-500">$/kW_DC</span>
+                        </label>
+                        <label class="space-y-1">
+                            <span class="text-slate-400 text-xs uppercase tracking-wider">Battery Capex</span>
+                            <input id="battery-capex" type="number" min="0" step="10" value="120"
+                                class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-200"
+                                aria-label="Battery Capex ($/kWh)" />
+                            <span class="text-[11px] text-slate-500">$/kWh</span>
+                        </label>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3 text-sm">
+                        <label class="space-y-1">
+                            <span class="text-slate-400 text-xs uppercase tracking-wider">Solar Opex</span>
+                            <input id="solar-opex" type="number" min="0" max="100" step="0.1" value="1.5"
+                                class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-200"
+                                aria-label="Solar Opex (% of capex)" />
+                            <span class="text-[11px] text-slate-500">% of capex / yr</span>
+                        </label>
+                        <label class="space-y-1">
+                            <span class="text-slate-400 text-xs uppercase tracking-wider">Battery Opex</span>
+                            <input id="battery-opex" type="number" min="0" max="100" step="0.1" value="2"
+                                class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-200"
+                                aria-label="Battery Opex (% of capex)" />
+                            <span class="text-[11px] text-slate-500">% of capex / yr</span>
+                        </label>
+                    </div>
+
+                    <div class="grid grid-cols-3 gap-3 text-sm">
+                        <label class="space-y-1">
+                            <span class="text-slate-400 text-xs uppercase tracking-wider">Solar Life</span>
+                            <input id="solar-life" type="number" min="1" max="60" step="1" value="30"
+                                class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-200"
+                                aria-label="Solar Lifetime (years)" />
+                            <span class="text-[11px] text-slate-500">years</span>
+                        </label>
+                        <label class="space-y-1">
+                            <span class="text-slate-400 text-xs uppercase tracking-wider">Battery Life</span>
+                            <input id="battery-life" type="number" min="1" max="40" step="1" value="20"
+                                class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-200"
+                                aria-label="Battery Lifetime (years)" />
+                            <span class="text-[11px] text-slate-500">years</span>
+                        </label>
+                        <label class="space-y-1">
+                            <span class="text-slate-400 text-xs uppercase tracking-wider">WACC</span>
+                            <input id="wacc" type="number" min="0" max="30" step="0.1" value="7"
+                                class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-200"
+                                aria-label="Weighted Average Cost of Capital (%)" />
+                            <span class="text-[11px] text-slate-500">% discount rate</span>
+                        </label>
+                    </div>
+                    <div class="text-[11px] text-slate-500">Defaults use $600/kW_DC solar, $120/kWh battery, 1.5% and 2% annual
+                        O&amp;M, lifetimes 30/20 yrs, WACC 7%. Transmission breakeven uses 50-yr life, 6% WACC.</div>
+                </div>
+
+                <!-- Stats (Capacity view only) -->
+                <div id="stats-section" class="p-4 rounded-xl bg-slate-800/50 border border-slate-700/50 space-y-3">
+                    <h3 class="text-xs font-semibold text-slate-400 uppercase">Global Stats</h3>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <div class="text-xs text-slate-500">Avg CF</div>
+                            <div class="text-xl font-mono text-white" id="stat-avg-cf">--%</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-slate-500">Best CF</div>
+                            <div class="text-xl font-mono text-emerald-400" id="stat-max-cf">--%</div>
+                        </div>
+                    </div>
+                    <p class="text-[11px] text-slate-400">Values summarize what share of the year the current build keeps
+                        1&nbsp;GW load supplied.</p>
+                    <div id="population-toggle" class="hidden pt-2 border-t border-slate-700/60">
+                        <div class="space-y-2">
+                            <label class="text-xs text-slate-400">Overlay on population</label>
+                            <select id="population-overlay-mode" class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm">
+                                <option value="none">Population only</option>
+                                <option value="cf">Capacity factor overlay</option>
+                                <option value="lcoe">LCOE overlay</option>
+                            </select>
+                        </div>
+                        <div id="population-overlay-config" class="hidden space-y-4 mt-4 p-3 rounded-lg bg-slate-900/40 border border-slate-800/60">
+                            <p class="text-[11px] text-slate-400 leading-relaxed">
+                                Tune solar and storage to recompute the capacity-factor overlay for this build.
+                            </p>
+                            <div class="space-y-2">
+                                <div class="flex justify-between text-xs text-slate-400">
+                                    <span>Solar Capacity</span>
+                                    <span class="font-mono text-amber-400"><span id="population-solar-val">5</span> GW_DC</span>
+                                </div>
+                                <input type="range" id="population-solar-slider" min="1" max="20" step="1" value="5"
+                                    class="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500">
+                            </div>
+                            <div class="space-y-2">
+                                <div class="flex justify-between text-xs text-slate-400">
+                                    <span>Battery Capacity</span>
+                                    <span class="font-mono text-cyan-400"><span id="population-batt-val">8</span> GWh</span>
+                                </div>
+                                <input type="range" id="population-batt-slider" min="0" max="36" step="2" value="8"
+                                    class="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-500">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Sample Days Controls (Sample view only) -->
+                <div id="sample-controls" class="hidden space-y-4">
+                    <div class="space-y-2">
+                        <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Select Week</label>
+                        <select id="sample-week-select"
+                            class="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-sm">
+                            <option>Loading...</option>
+                        </select>
+                        <p class="text-[11px] text-slate-500">Each season loads a representative 168-hour week from the
+                            simulation set.</p>
+                    </div>
+
+                    <div class="space-y-3">
+                        <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Time
+                            Scrubber</label>
+                        <input type="range" id="time-scrubber" min="0" max="167" value="0"
+                            class="w-full h-3 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-sky-500" />
+                        <div class="flex justify-between text-xs">
+                            <span id="scrubber-time" class="text-slate-300 font-mono">--</span>
+                            <span id="scrubber-progress" class="text-slate-500 font-mono">Hour 0 / 168</span>
+                        </div>
+                        <p class="text-[11px] text-slate-500">Scrub hour-by-hour to see solar production, storage response,
+                            and any shortfall versus 1&nbsp;GW target.</p>
+                    </div>
+
+                    <div class="flex gap-2">
+                        <button id="sample-play"
+                            class="flex-1 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-lg font-semibold text-sm">
+                            Play
+                        </button>
+                        <button id="sample-reset"
+                            class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg font-semibold text-sm">
+                            Reset
+                        </button>
+                    </div>
+                    <p class="text-[11px] text-slate-500">Storage charges on surplus solar, discharges to cover the
+                        deficit, and logs any remaining gap as unserved energy.</p>
+                </div>
+
+                <!-- Selected Location (Capacity view only) -->
+                <div id="location-panel" class="hidden space-y-4 pt-4 border-t border-slate-800">
+                    <h2 class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Selected Location</h2>
+                    <div class="text-sm font-mono text-slate-300" id="loc-coords">--</div>
+                    <div class="text-3xl font-bold text-white" id="loc-value">--%</div>
+                    <div class="text-xs text-slate-500" id="loc-label">Annual Capacity Factor</div>
+                    <p class="text-[11px] text-slate-500">Capacity factor indicates the share of the year this configuration meets 1&nbsp;GW baseload.</p>
+                    <div class="text-xs text-slate-400 hidden space-y-1" id="loc-config">
+                        <div id="loc-config-text">--</div>
+                        <div class="text-[11px] text-slate-500 hidden" id="loc-tx-info">Transmission breakeven:
+                            <span id="loc-tx-mwh">--</span>,
+                            <span id="loc-tx-gwkm">--</span></div>
+                    </div>
+                </div>
+
+            </div>
+        </aside>
+
+        <!-- Map & Charts Area -->
+        <div class="flex-1 flex flex-col relative">
+
+            <!-- Map -->
+            <div id="map" class="flex-1 bg-slate-950 z-0"></div>
+            <div id="sample-chart-overlay"
+                class="hidden absolute inset-x-6 bottom-6 z-50 bg-slate-900/95 border border-slate-700 rounded-2xl shadow-2xl p-5">
+                <div class="flex items-start justify-between gap-3 mb-3">
+                    <div>
+                        <h3 class="text-sm font-semibold text-slate-100">Sample Day Breakdown</h3>
+                        <div class="text-xs text-slate-400" id="sample-chart-location">Select a location on the map.</div>
+                    </div>
+                    <button id="sample-chart-close"
+                        class="text-xs px-3 py-1 bg-slate-800 hover:bg-slate-700 rounded text-slate-200">Hide</button>
+                </div>
+                <div id="sample-chart-status" class="text-xs text-slate-400 mb-3">Pick a location to view solar/battery
+                    operation for the selected week.</div>
+                <div class="h-56">
+                    <canvas id="sample-chart-canvas" class="hidden w-full h-full"></canvas>
+                </div>
+            </div>
+
+            <!-- Legend Overlay (changes based on mode) -->
+            <div id="legend-capacity"
+                class="absolute bottom-8 right-8 bg-slate-900/90 backdrop-blur p-4 rounded-xl border border-slate-800 z-[400] shadow-2xl">
+                <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Capacity Factor</div>
+                <div class="w-48 h-3 rounded-full mb-2 legend-gradient"></div>
+                <div class="flex justify-between text-[10px] font-mono text-slate-500">
+                    <span>5%</span>
+                    <span>40%</span>
+                    <span>70%</span>
+                    <span>100%</span>
+                </div>
+            </div>
+
+            <div id="legend-samples"
+                class="hidden absolute bottom-8 right-8 bg-slate-900/90 backdrop-blur p-4 rounded-xl border border-slate-800 z-[400] shadow-2xl">
+                <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Generation source</div>
+                <div class="flex gap-3 text-xs text-slate-200">
+                    <span class="flex items-center gap-1"><span
+                            class="inline-block w-3 h-3 rounded-full bg-yellow-400"></span>Solar</span>
+                    <span class="flex items-center gap-1"><span
+                            class="inline-block w-3 h-3 rounded-full bg-purple-500"></span>Battery</span>
+                    <span class="flex items-center gap-1"><span
+                            class="inline-block w-3 h-3 rounded-full bg-gray-400"></span>Other</span>
+                </div>
+            </div>
+
+                <div id="legend-population"
+                class="hidden absolute bottom-8 right-8 bg-slate-900/90 backdrop-blur p-4 rounded-xl border border-slate-800 z-[400] shadow-2xl">
+                <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Population (people)</div>
+                <div class="w-full h-3 rounded-full mb-2 legend-gradient-pop"></div>
+                <div class="flex justify-between text-[10px] font-mono text-slate-500">
+                    <span id="legend-pop-min">0</span>
+                    <span id="legend-pop-max">--</span>
+                </div>
+                <div class="text-[11px] text-slate-400 mt-2">Use overlay to view capacity factor or LCOE colors on top of population.</div>
+            </div>
+
+                <div id="legend-lcoe"
+                class="hidden absolute bottom-8 right-8 bg-slate-900/90 backdrop-blur p-4 rounded-xl border border-slate-800 z-[400] shadow-2xl">
+                <div id="legend-lcoe-title" class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">LCOE ($/MWh)</div>
+                <div class="w-full space-y-2 mb-2" id="legend-lcoe-scale">
+                    <div id="legend-lcoe-bar" class="h-3 rounded-full legend-gradient-cost w-full"></div>
+                    <div class="flex justify-between text-[10px] font-mono text-slate-500 w-full">
+                        <span id="legend-lcoe-min">--</span>
+                        <span id="legend-lcoe-mid">--</span>
+                        <span id="legend-lcoe-max">--</span>
+                    </div>
+                </div>
+                    <div class="space-y-2">
+                        <div class="text-[11px] text-slate-400" id="legend-lcoe-ref">Reference: --</div>
+                        <div id="comparison-toggle" class="hidden text-[11px]">
+                            <div class="flex items-center gap-2">
+                                <span class="text-slate-400">Map:</span>
+                                <div class="flex rounded border border-slate-700 overflow-hidden">
+                                    <button id="view-mode-lcoe" data-mode="lcoe"
+                                        class="px-3 py-1 text-slate-200 bg-slate-800 text-xs font-semibold">LCOE Delta</button>
+                                    <button id="view-mode-tx" data-mode="tx"
+                                        class="px-3 py-1 text-slate-400 bg-slate-900 text-xs font-semibold">Transmission $/GW/km</button>
+                                </div>
+                            </div>
+                            <div class="text-[10px] text-slate-500">Breakeven cost assumes straight-line distance (not actual corridors), 50-year life, 6% WACC.</div>
+                        </div>
+                        <div class="flex items-center justify-between gap-2">
+                            <div class="text-[10px] text-slate-500">Grey cells fall short of the target CF. Green indicates better economics vs the reference; red indicates worse.</div>
+                            <div class="flex gap-2">
+                                <button id="legend-lock-btn"
+                                    class="hidden text-[11px] px-2 py-1 bg-slate-800 border border-slate-700 rounded text-slate-200 hover:bg-slate-700">Fix
+                                    legend scales</button>
+                                <button id="lcoe-clear-ref"
+                                    class="hidden text-[11px] px-2 py-1 bg-slate-800 border border-slate-700 rounded text-slate-200 hover:bg-slate-700">Exit
+                                    comparison</button>
+                            </div>
+                        </div>
+                        <p id="legend-tx-explainer" class="hidden text-[10px] text-slate-400 leading-snug">
+                            Breakeven transmission ($/GW/km) shows the maximum line cost where generating 1&nbsp;GW baseload in this cell and delivering it to your reference site costs the same as building the system directly at the reference.
+                        </p>
+                    </div>
+                </div>
+
+            <!-- Loading Overlay -->
+            <div id="loading"
+                class="absolute inset-0 bg-slate-950/80 backdrop-blur z-50 flex items-center justify-center">
+                <div class="text-center space-y-4">
+                    <div
+                        class="w-12 h-12 border-4 border-slate-700 border-t-amber-500 rounded-full animate-spin mx-auto">
+                    </div>
+                    <div class="text-slate-300 font-medium">Loading Simulation Data...</div>
+                    <div class="text-xs text-slate-500" id="loading-status">Initializing WebAssembly...</div>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <div id="info-panel" class="hidden fixed inset-0 z-50">
+        <div id="info-backdrop" class="absolute inset-0 bg-slate-950/80 backdrop-blur-sm"></div>
+        <div
+            class="relative max-w-3xl mx-auto my-10 bg-slate-900 text-slate-100 border border-slate-800 rounded-2xl shadow-2xl p-6 space-y-5 max-h-[calc(100vh-4rem)] overflow-y-auto">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <h2 class="text-xl font-semibold">How to read the Baseload Solar Atlas</h2>
+                    <p class="text-sm text-slate-400">Energy-system shorthand spelled out for rapid interpretation.</p>
+                </div>
+                <button id="info-close" type="button"
+                    class="px-3 py-1 text-xs font-semibold rounded-lg border border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700 focus:outline-none focus:ring focus:ring-amber-500/30">
+                    Close
+                </button>
+            </div>
+
+            <section class="space-y-2 text-sm leading-relaxed">
+                <h3 class="text-sky-300 font-semibold text-sm uppercase tracking-wide">Baseline assumption</h3>
+                <p>Every slider setting is tested against a constant 1&nbsp;GW baseload demand (8,760&nbsp;GWh a year). The
+                    simulation checks whether a solar plant (GW_DC) plus a battery (GWh) can deliver that flat demand
+                    while charging, discharging, or spilling energy hour by hour.</p>
+            </section>
+
+            <section class="space-y-2 text-sm leading-relaxed">
+                <h3 class="text-sky-300 font-semibold text-sm uppercase tracking-wide">What the metrics mean</h3>
+                <ul class="list-disc list-inside text-slate-300 space-y-1">
+                    <li><strong>Capacity factor (CF):</strong> Share of the year that a 1&nbsp;GW load is met with the
+                        chosen build. 80% CF implies 7,000+ hours served without relying on other resources.</li>
+                    <li><strong>LCOE ($/MWh):</strong> Levelized cost of energy for 1&nbsp;GW output, including CAPEX,
+                        OPEX, lifetime, and WACC inputs in the sidebar. The map shows the lowest-cost configuration that
+                        meets the target CF threshold.</li>
+                    <li><strong>Transmission delta:</strong> When you select a reference location, other cells report the
+                        cost difference vs that reference as well as a straight-line breakeven $/GW/km signal.</li>
+                </ul>
+            </section>
+
+            <section class="space-y-2 text-sm leading-relaxed">
+                <h3 class="text-sky-300 font-semibold text-sm uppercase tracking-wide">Sliders &amp; inputs</h3>
+                <ul class="list-disc list-inside text-slate-300 space-y-1">
+                    <li><strong>Solar capacity (GW_DC):</strong> The nameplate AC-to-DC output of the PV build being
+                        simulated. Higher GW_DC improves CF but increases cost.</li>
+                    <li><strong>Battery capacity (GWh):</strong> Total stored energy. Charging priority goes to surplus
+                        solar; discharge fills any gap between 1&nbsp;GW demand and current solar production.</li>
+                    <li><strong>LCOE inputs:</strong> Defaults assume $600/kW_DC solar CAPEX, $120/kWh battery CAPEX,
+                        1.5%/2% annual O&amp;M, 30/20-year lives, and 7% WACC. Adjust to match your country,
+                        counterparty, or financing stack.</li>
+                </ul>
+            </section>
+
+            <section class="space-y-2 text-sm leading-relaxed">
+                <h3 class="text-sky-300 font-semibold text-sm uppercase tracking-wide">View modes</h3>
+                <ul class="list-disc list-inside text-slate-300 space-y-1">
+                    <li><strong>Capacity Factor:</strong> Heat map of CF across all simulated locations for the selected
+                        solar + battery pair.</li>
+                    <li><strong>Sample Days:</strong> A representative 168-hour week that visualizes solar, battery
+                        discharge, state-of-charge, and any unserved energy.</li>
+                    <li><strong>LCOE Comparison:</strong> Chooses the cheapest configuration per location that meets the
+                        target CF. Click any cell to set it as the cost reference and unlock transmission deltas.</li>
+                </ul>
+            </section>
+
+            <section class="space-y-2 text-sm leading-relaxed">
+                <h3 class="text-sky-300 font-semibold text-sm uppercase tracking-wide">Data &amp; caveats</h3>
+                <p>The atlas is meant for directional planning. It does not model grid constraints, curtailment pricing,
+                    or multi-day reliability events beyond the provided sample weeks. Treat the outputs as a fast sanity
+                    check before diving into detailed production-cost or capacity-expansion studies.</p>
+            </section>
+        </div>
+    </div>
+
+    <!-- Libraries -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Application Logic -->
+    <script type="module" src="js/app.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const panel = document.getElementById('info-panel');
+            const openBtn = document.getElementById('info-toggle');
+            const closeBtn = document.getElementById('info-close');
+            const backdrop = document.getElementById('info-backdrop');
+
+            const openPanel = () => {
+                panel?.classList.remove('hidden');
+                openBtn?.setAttribute('aria-expanded', 'true');
+            };
+            const closePanel = () => {
+                panel?.classList.add('hidden');
+                openBtn?.setAttribute('aria-expanded', 'false');
+            };
+
+            openBtn?.addEventListener('click', openPanel);
+            closeBtn?.addEventListener('click', closePanel);
+            backdrop?.addEventListener('click', closePanel);
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' && !panel?.classList.contains('hidden')) {
+                    closePanel();
+                }
+            });
+        });
+    </script>
+</body>
+
+</html>

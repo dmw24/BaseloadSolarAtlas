@@ -1,4 +1,4 @@
-import { loadSummary, loadPopulationCsv, loadVoronoiGeojson } from './data.js';
+import { loadSummary, loadPopulationCsv, loadVoronoiGeojson, loadFossilPlantsCsv, loadVoronoiFossilCapacityCsv } from './data.js';
 import { initMap, updateMap, updateLcoeMap, updatePopulationSimple } from './map.js';
 import { initSampleDays, loadSampleWeekData, cleanupSampleDays } from './samples.js';
 
@@ -14,7 +14,11 @@ let populationData = [];
 let summaryCoordIndex = new Map();
 let populationCoordIndex = new Map();
 let voronoiGeojson = null;
+let fossilPlants = [];
+let fossilCapacity = [];
+let fossilCapacityMap = new Map();
 const BASE_LOAD_MW = 1000; // assume baseload of 1 GW for CF outputs
+const ALL_FUELS = ['coal', 'gas', 'oil'];
 const TX_WACC = 0.06;
 const TX_LIFE = 50;
 const TX_CRF = (() => {
@@ -90,8 +94,10 @@ const batteryOpexInput = document.getElementById('battery-opex');
 const solarLifeInput = document.getElementById('solar-life');
 const batteryLifeInput = document.getElementById('battery-life');
 const waccInput = document.getElementById('wacc');
-const populationOverlaySelect = document.getElementById('population-overlay-mode');
 const populationOverlayButtons = document.querySelectorAll('#population-overlay-mode button');
+const populationBaseButtons = document.querySelectorAll('#population-base-toggle button');
+const populationFuelButtons = document.querySelectorAll('#population-fuel-filter button');
+const populationFuelFilterWrapper = document.getElementById('population-fuel-filter');
 const populationToggleWrapper = document.getElementById('population-toggle');
 const populationOverlaySelectWrapper = document.getElementById('population-overlay-select-wrapper');
 const populationOverlayConfig = document.getElementById('population-overlay-config');
@@ -105,6 +111,7 @@ const legendPopulation = document.getElementById('legend-population');
 const legendPopMin = document.getElementById('legend-pop-min');
 const legendPopMax = document.getElementById('legend-pop-max');
 const legendPopLayerNote = document.getElementById('legend-pop-layer-note');
+const legendFossilPlants = document.getElementById('legend-fossil-plants');
 const populationLcoeWrapper = document.getElementById('population-lcoe-controls-wrapper');
 const populationOverlayHelper = document.getElementById('population-overlay-helper');
 const populationViewHelper = document.getElementById('population-view-helper');
@@ -114,9 +121,16 @@ const populationChartsContainer = document.getElementById('population-charts');
 const populationChartHistogram = document.getElementById('population-chart-histogram');
 const populationChartLatMetric = document.getElementById('population-chart-lat-metric');
 const populationChartLatPop = document.getElementById('population-chart-lat-pop');
+const populationChartHistogramTitle = document.getElementById('population-chart-histogram-title');
 const populationChartHistogramLabel = document.getElementById('population-chart-histogram-label');
 const populationChartMetricLabel = document.getElementById('population-chart-metric-label');
+const populationChartLatMetricTitle = document.getElementById('population-chart-lat-metric-title');
+const populationChartLatPopLabel = document.getElementById('population-chart-lat-pop-label');
+const populationChartLatPopHelper = document.getElementById('population-chart-lat-pop-helper');
+const populationChartLayerButtons = document.querySelectorAll('#population-chart-layer-toggle button');
+const populationChartOverlayButtons = document.querySelectorAll('#population-chart-overlay-toggle button');
 const populationChartMetricButtons = document.querySelectorAll('#population-chart-metric-toggle button');
+const viewModeChartSelect = document.getElementById('view-mode-chart');
 const locCoordsEl = document.getElementById('loc-coords');
 const locValueEl = document.getElementById('loc-value');
 const locLabelEl = document.getElementById('loc-label');
@@ -136,7 +150,9 @@ let populationCharts = {
     metric: null
 };
 let populationChartMetric = 'cf';
+let populationBaseLayer = 'population';
 let populationOverlayMode = 'none';
+let populationFuelFilter = new Set(['coal', 'gas', 'oil']);
 let locationPanelShowingChartSummary = false;
 
 // Helpers
@@ -158,6 +174,17 @@ function buildCoordIndex(data) {
         index.set(key, row);
     });
     return index;
+}
+
+function capitalizeWord(str = '') {
+    if (!str) return '';
+    return str.charAt(0).toUpperCase() + str.slice(1);
+}
+
+function describeFuelSelection(set) {
+    if (!set || set.size === 0 || set.size === ALL_FUELS.length) return 'fossil';
+    if (set.size === 1) return Array.from(set)[0];
+    return 'selected fossil';
 }
 
 function capitalRecoveryFactor(rate, years) {
@@ -306,8 +333,6 @@ function setViewModeExplanation(mode) {
 }
 
 function updatePopulationOverlayControls(mode) {
-    populationOverlayMode = mode;
-    updatePopulationOverlayToggleUI();
     if (!populationOverlayConfig) return;
 
     // Show CF config controls (solar/batt sliders) when CF overlay selected
@@ -341,22 +366,13 @@ function updatePopulationOverlayControls(mode) {
     }
 }
 
-function setOverlaySelectVisibility(show) {
-    if (populationOverlaySelectWrapper) {
-        populationOverlaySelectWrapper.classList.toggle('hidden', !show);
-    }
-    if (populationOverlayHelper) {
-        populationOverlayHelper.classList.toggle('hidden', !show);
-    }
-}
-
 function updatePopulationViewHelperCopy() {
     if (!populationViewHelper || !populationChartsCta) return;
     if (populationDisplayMode === 'charts') {
-        populationViewHelper.textContent = 'Charts summarise all cells by population percentile and latitude. Switch back to Map to examine individual locations.';
+        populationViewHelper.textContent = 'Charts summarise whichever base layer is selected (population or installed capacity) by percentile and latitude.';
         populationChartsCta.textContent = 'Show map view';
     } else {
-        populationViewHelper.textContent = 'Map mode shows each cell directly; Charts condense the same information by population percentile and latitude band.';
+        populationViewHelper.textContent = 'Map mode shows the chosen base layer directly; Charts condense the same information by percentile and latitude band.';
         populationChartsCta.textContent = 'Show charts';
     }
 }
@@ -419,6 +435,30 @@ function updatePopulationOverlayToggleUI() {
     });
 }
 
+function updatePopulationBaseToggleUI() {
+    if (!populationBaseButtons || populationBaseButtons.length === 0) return;
+    populationBaseButtons.forEach(btn => {
+        const isActive = btn.dataset.base === populationBaseLayer;
+        btn.classList.toggle('bg-slate-700', isActive);
+        btn.classList.toggle('text-slate-100', isActive);
+        btn.classList.toggle('text-slate-300', !isActive);
+    });
+    if (populationFuelFilterWrapper) {
+        populationFuelFilterWrapper.classList.toggle('hidden', populationBaseLayer !== 'plants');
+    }
+}
+
+function updatePopulationFuelToggleUI() {
+    if (!populationFuelButtons || populationFuelButtons.length === 0) return;
+    populationFuelButtons.forEach(btn => {
+        const fuel = btn.dataset.fuel;
+        const isActive = populationFuelFilter.has(fuel);
+        btn.classList.toggle('bg-slate-700', isActive);
+        btn.classList.toggle('text-slate-100', isActive);
+        btn.classList.toggle('text-slate-300', !isActive);
+    });
+}
+
 function updateChartMetricToggleUI() {
     if (!populationChartMetricButtons || populationChartMetricButtons.length === 0) return;
     populationChartMetricButtons.forEach(btn => {
@@ -429,11 +469,63 @@ function updateChartMetricToggleUI() {
     });
 }
 
+function updateChartLayerToggleUI() {
+    if (!populationChartLayerButtons || populationChartLayerButtons.length === 0) return;
+    populationChartLayerButtons.forEach(btn => {
+        const isActive = btn.dataset.layer === populationBaseLayer;
+        btn.classList.toggle('bg-slate-700', isActive);
+        btn.classList.toggle('text-slate-100', isActive);
+        btn.classList.toggle('text-slate-300', !isActive);
+    });
+}
+
+function updateChartOverlayToggleUI() {
+    if (!populationChartOverlayButtons || populationChartOverlayButtons.length === 0) return;
+    populationChartOverlayButtons.forEach(btn => {
+        const isActive = btn.dataset.overlay === populationOverlayMode;
+        btn.classList.toggle('bg-slate-700', isActive);
+        btn.classList.toggle('text-slate-100', isActive);
+        btn.classList.toggle('text-slate-300', !isActive);
+    });
+}
+
 function setPopulationChartMetric(mode) {
     const normalized = mode === 'lcoe' ? 'lcoe' : 'cf';
     populationChartMetric = normalized;
     updateChartMetricToggleUI();
-    if (populationDisplayMode === 'charts') {
+    if (populationOverlayMode !== normalized) {
+        populationOverlayMode = normalized;
+        updatePopulationOverlayToggleUI();
+        updatePopulationOverlayControls(normalized);
+    }
+    if (currentViewMode === 'population') {
+        updatePopulationView();
+    }
+}
+
+function setPopulationBaseLayer(mode) {
+    const normalized = mode === 'plants' ? 'plants' : 'population';
+    populationBaseLayer = normalized;
+    updatePopulationBaseToggleUI();
+    updateChartLayerToggleUI();
+    updatePopulationFuelToggleUI();
+    updatePopulationViewHelperCopy();
+    if (currentViewMode === 'population') {
+        updatePopulationView();
+    }
+}
+
+function togglePopulationFuel(fuel) {
+    if (!fuel) return;
+    const normalized = fuel.toLowerCase();
+    if (populationFuelFilter.has(normalized)) {
+        if (populationFuelFilter.size === 1) return;
+        populationFuelFilter.delete(normalized);
+    } else {
+        populationFuelFilter.add(normalized);
+    }
+    updatePopulationFuelToggleUI();
+    if (populationBaseLayer === 'plants' && currentViewMode === 'population') {
         updatePopulationView();
     }
 }
@@ -706,7 +798,7 @@ function updateLcoeLegend(points, overrideInfo = null) {
 function queueLcoeUpdate() {
     // Check if we need to update LCOE view
     const isLcoeMode = currentViewMode === 'lcoe';
-    const isPopulationWithLcoeOverlay = currentViewMode === 'population' && populationOverlaySelect?.value === 'lcoe';
+    const isPopulationWithLcoeOverlay = currentViewMode === 'population' && populationOverlayMode === 'lcoe';
 
     if (!isLcoeMode && !isPopulationWithLcoeOverlay) return;
 
@@ -726,66 +818,161 @@ function queueLcoeUpdate() {
 function buildPopulationMetrics(enrichedPop, overlayMode, cfData, lcoeData) {
     const cfByCoord = new Map(cfData.map(d => [coordKey(d.latitude, d.longitude), d]));
     const lcoeByCoord = new Map(lcoeData.map(d => [coordKey(d.latitude, d.longitude), d]));
-    const isLcoe = overlayMode === 'lcoe';
-
     return enrichedPop.map(p => {
         const key = coordKey(p.latitude, p.longitude);
         const cfRow = cfByCoord.get(key);
         const lcoeRow = lcoeByCoord.get(key);
-        const metricRow = isLcoe ? lcoeRow : (cfRow || lcoeRow);
-        const metricVal = isLcoe ? metricRow?.lcoe : metricRow?.annual_cf;
-        if (!Number.isFinite(metricVal)) return null;
+        const weight = Math.max(0, p.population_2020 || 0);
+        let metricVal;
+        if (overlayMode === 'cf') {
+            metricVal = cfRow?.annual_cf;
+        } else if (overlayMode === 'lcoe') {
+            metricVal = lcoeRow?.lcoe;
+        } else {
+            metricVal = weight;
+        }
+        if ((overlayMode === 'cf' || overlayMode === 'lcoe') && !Number.isFinite(metricVal)) {
+            return null;
+        }
         return {
             latitude: p.latitude,
             longitude: p.longitude,
-            population: p.population_2020 || 0,
-            metric: metricVal
+            metric: metricVal,
+            weight
+        };
+    }).filter(m => (overlayMode === 'cf' || overlayMode === 'lcoe') ? Number.isFinite(m.metric) : m.weight > 0);
+}
+
+function buildPlantMetrics(capacityRows, overlayMode, cfData, lcoeData, selectedFuels) {
+    const cfById = new Map(cfData.map(d => [d.location_id, d]));
+    const lcoeById = new Map(lcoeData.map(d => [d.location_id, d]));
+    const fuelSet = selectedFuels && selectedFuels.size ? selectedFuels : new Set(ALL_FUELS);
+    return capacityRows.map(row => {
+        let totalMw = 0;
+        fuelSet.forEach(fuel => {
+            const col = `${fuel}_mw`;
+            totalMw += Math.max(0, Number(row[col]) || 0);
+        });
+        if (!totalMw) return null;
+        let metricVal;
+        if (overlayMode === 'cf') {
+            metricVal = cfById.get(row.location_id)?.annual_cf;
+        } else if (overlayMode === 'lcoe') {
+            metricVal = lcoeById.get(row.location_id)?.lcoe;
+        } else {
+            metricVal = totalMw;
+        }
+        if ((overlayMode === 'cf' || overlayMode === 'lcoe') && !Number.isFinite(metricVal)) {
+            return null;
+        }
+        return {
+            latitude: Number(row.latitude),
+            longitude: Number(row.longitude),
+            metric: metricVal,
+            weight: totalMw
         };
     }).filter(Boolean);
 }
 
-function buildPopulationHistogram(metrics, overlayMode, stepPct = 2) {
-    const totalPop = metrics.reduce((sum, m) => sum + (m.population || 0), 0);
-    if (!totalPop) return { labels: [], data: [] };
+function buildWeightedHistogram(metrics, overlayMode, bucketCount = 50) {
+    // Build histogram with CF or LCOE on x-axis and population/capacity on y-axis
+    if (!metrics.length) return { labels: [], data: [] };
 
-    const sorted = metrics.slice().sort((a, b) => overlayMode === 'lcoe' ? a.metric - b.metric : b.metric - a.metric);
-    const labels = [];
-    const data = [];
-    let cumulative = 0;
-    let idx = 0;
-    for (let pct = 0; pct <= 100; pct += stepPct) {
-        const targetPop = (pct / 100) * totalPop;
-        while (idx < sorted.length && cumulative < targetPop) {
-            cumulative += sorted[idx].population;
-            idx++;
+    // For overlays (CF or LCOE), bucket by the metric value
+    if (overlayMode === 'cf' || overlayMode === 'lcoe') {
+        // Filter metrics with valid metric values
+        const validMetrics = metrics.filter(m => Number.isFinite(m.metric));
+        if (!validMetrics.length) return { labels: [], data: [] };
+
+        // Determine min and max for the metric
+        const metricValues = validMetrics.map(m => m.metric);
+        const minMetric = Math.min(...metricValues);
+        const maxMetric = Math.max(...metricValues);
+
+        // Create buckets
+        const bucketSize = (maxMetric - minMetric) / bucketCount;
+        if (bucketSize === 0) {
+            // All values are the same
+            return {
+                labels: [overlayMode === 'cf' ? `${(minMetric * 100).toFixed(1)}%` : `$${minMetric.toFixed(0)}`],
+                data: [validMetrics.reduce((sum, m) => sum + (m.weight || 0), 0)]
+            };
         }
-        const ref = sorted[Math.min(idx, sorted.length - 1)];
-        const val = overlayMode === 'lcoe' ? ref?.metric : (ref?.metric ?? 0) * 100;
-        labels.push(`${pct}%`);
-        data.push(Number.isFinite(val) ? val : null);
+
+        const buckets = Array.from({ length: bucketCount }, (_, i) => ({
+            min: minMetric + i * bucketSize,
+            max: minMetric + (i + 1) * bucketSize,
+            weight: 0
+        }));
+
+        // Distribute metrics into buckets
+        validMetrics.forEach(m => {
+            const bucketIdx = Math.min(bucketCount - 1, Math.floor((m.metric - minMetric) / bucketSize));
+            buckets[bucketIdx].weight += m.weight || 0;
+        });
+
+        // Create labels and data
+        const labels = buckets.map(b => {
+            const midpoint = (b.min + b.max) / 2;
+            if (overlayMode === 'cf') {
+                return `${(midpoint * 100).toFixed(1)}%`;
+            } else {
+                return `$${midpoint.toFixed(0)}`;
+            }
+        });
+        const data = buckets.map(b => b.weight);
+
+        return { labels, data };
+    } else {
+        // For no overlay, show percentile-based distribution
+        // Sort by metric descending and calculate cumulative weight percentiles
+        const sorted = [...metrics].filter(m => Number.isFinite(m.metric) && m.weight > 0).sort((a, b) => b.metric - a.metric);
+        if (!sorted.length) return { labels: [], data: [] };
+
+        const totalWeight = sorted.reduce((sum, m) => sum + m.weight, 0);
+        const percentileCount = 100;
+        const labels = [];
+        const data = [];
+
+        for (let i = 0; i < percentileCount; i++) {
+            labels.push(`${i}%`);
+            const targetPercentile = i / 100;
+            let cumWeight = 0;
+            let metricAtPercentile = sorted[0].metric;
+
+            for (const m of sorted) {
+                cumWeight += m.weight;
+                if (cumWeight / totalWeight >= targetPercentile) {
+                    metricAtPercentile = m.metric;
+                    break;
+                }
+            }
+            data.push(metricAtPercentile);
+        }
+
+        return { labels, data };
     }
-    return { labels, data };
 }
 
-function buildPopulationLatitudeHistogram(metrics, bucketCount = 100) {
-    const totalPop = metrics.reduce((sum, m) => sum + (m.population || 0), 0);
-    if (!totalPop) return { labels: [], data: [] };
+function buildWeightedLatitudeHistogram(metrics, bucketCount = 100) {
+    const totalWeight = metrics.reduce((sum, m) => sum + (m.weight || 0), 0);
+    if (!totalWeight) return { labels: [], data: [] };
 
     const bucketSize = 180 / bucketCount;
     const buckets = Array.from({ length: bucketCount }, (_, i) => ({
         min: -90 + i * bucketSize,
         max: -90 + (i + 1) * bucketSize,
-        pop: 0
+        weight: 0
     }));
 
     metrics.forEach(m => {
         if (!Number.isFinite(m.latitude)) return;
         const idx = Math.min(bucketCount - 1, Math.max(0, Math.floor((m.latitude + 90) / bucketSize)));
-        buckets[idx].pop += m.population || 0;
+        buckets[idx].weight += m.weight || 0;
     });
 
     const labels = buckets.map(b => `${((b.min + b.max) / 2).toFixed(1)}°`);
-    const data = buckets.map(b => (b.pop / totalPop) * 100);
+    const data = buckets.map(b => (b.weight / totalWeight) * 100);
     return {
         labels: labels.reverse(),
         data: data.reverse()
@@ -798,27 +985,135 @@ function destroyChart(chart) {
     }
 }
 
-function renderPopulationCharts(metrics, overlayMode) {
+function renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels }) {
     if (!populationChartHistogram || !populationChartLatMetric || !populationChartLatPop) return;
     const ChartJS = window.Chart;
     if (!ChartJS) return;
+    const isCf = overlayMode === 'cf';
     const isLcoe = overlayMode === 'lcoe';
-    const metricLabel = isLcoe ? 'LCOE ($/MWh)' : 'Capacity Factor (%)';
-    const normalizeMetric = (val) => isLcoe ? val : val * 100;
-
-    const histogram = buildPopulationHistogram(metrics, overlayMode);
-    const histogramTooltip = (ctx) => {
-        const value = ctx?.parsed?.y;
-        if (!Number.isFinite(value)) return `${metricLabel}: --`;
-        const decimals = 1;
-        return `${metricLabel}: ${value.toFixed(decimals)}`;
+    const fuelSet = selectedFuels instanceof Set ? selectedFuels : (selectedFuels ? new Set(selectedFuels) : new Set(ALL_FUELS));
+    const fuelDescriptor = describeFuelSelection(fuelSet);
+    const weightDescriptor = baseLayer === 'plants' ? `${fuelDescriptor} capacity` : 'population';
+    let metricLabel;
+    if (isCf) {
+        metricLabel = 'Capacity Factor (%)';
+    } else if (isLcoe) {
+        metricLabel = 'LCOE ($/MWh)';
+    } else if (baseLayer === 'plants') {
+        const prefix = fuelDescriptor === 'fossil' ? 'Fossil' : capitalizeWord(fuelDescriptor);
+        metricLabel = `${prefix} capacity (MW)`;
+    } else {
+        metricLabel = 'Population (people)';
+    }
+    const normalizeMetric = (val) => {
+        if (!Number.isFinite(val)) return val;
+        if (isCf) return val * 100;
+        return val;
     };
 
+    const histogram = buildWeightedHistogram(metrics, overlayMode);
+
+    // Determine axis labels, titles, and helpers based on overlay mode
+    let xAxisLabel, yAxisLabel, histogramMainTitle, histogramHelperText, scatterXAxisLabel, histogramTooltip;
+    if (overlayMode === 'cf') {
+        xAxisLabel = 'Capacity Factor (%)';
+        yAxisLabel = weightDescriptor === 'population' ? 'Population (people)' : `${capitalizeWord(fuelDescriptor)} capacity (MW)`;
+        scatterXAxisLabel = 'Capacity Factor (%)';
+        histogramMainTitle = 'Distribution by Capacity Factor';
+        histogramHelperText = weightDescriptor === 'population'
+            ? 'Shows total population as a function of Capacity Factor'
+            : `Shows total ${fuelDescriptor} capacity as a function of Capacity Factor`;
+        histogramTooltip = (ctx) => {
+            const weight = ctx?.parsed?.y;
+            const bucket = ctx?.label;
+            if (!Number.isFinite(weight)) return '--';
+
+            if (weightDescriptor === 'population') {
+                const millions = weight / 1e6;
+                if (millions >= 1) {
+                    return `${bucket}: ${millions.toFixed(2)}M people`;
+                } else {
+                    return `${bucket}: ${weight.toLocaleString()} people`;
+                }
+            } else {
+                return `${bucket}: ${weight.toFixed(0)} MW`;
+            }
+        };
+    } else if (overlayMode === 'lcoe') {
+        xAxisLabel = 'LCOE ($/MWh)';
+        yAxisLabel = weightDescriptor === 'population' ? 'Population (people)' : `${capitalizeWord(fuelDescriptor)} capacity (MW)`;
+        scatterXAxisLabel = 'LCOE ($/MWh)';
+        histogramMainTitle = 'Distribution by LCOE';
+        histogramHelperText = weightDescriptor === 'population'
+            ? 'Shows total population as a function of LCOE'
+            : `Shows total ${fuelDescriptor} capacity as a function of LCOE`;
+        histogramTooltip = (ctx) => {
+            const weight = ctx?.parsed?.y;
+            const bucket = ctx?.label;
+            if (!Number.isFinite(weight)) return '--';
+
+            if (weightDescriptor === 'population') {
+                const millions = weight / 1e6;
+                if (millions >= 1) {
+                    return `${bucket}: ${millions.toFixed(2)}M people`;
+                } else {
+                    return `${bucket}: ${weight.toLocaleString()} people`;
+                }
+            } else {
+                return `${bucket}: ${weight.toFixed(0)} MW`;
+            }
+        };
+    } else {
+        // When no overlay, show population or capacity by percentiles
+        xAxisLabel = `Cumulative global ${weightDescriptor} (%)`;
+        yAxisLabel = metricLabel;
+        scatterXAxisLabel = metricLabel;
+        histogramMainTitle = `${metricLabel} by percentile`;
+        histogramHelperText = `Shows ${metricLabel.toLowerCase()} across ${weightDescriptor} percentiles`;
+        histogramTooltip = (ctx) => {
+            const value = ctx?.parsed?.y;
+            if (!Number.isFinite(value)) return `${metricLabel}: --`;
+            const decimals = isCf ? 1 : 0;
+            return `${metricLabel}: ${value.toFixed(decimals)}`;
+        };
+    }
+
+    // Update top histogram chart title and helper text
+    if (populationChartHistogramTitle) {
+        populationChartHistogramTitle.textContent = histogramMainTitle;
+    }
     if (populationChartHistogramLabel) {
-        populationChartHistogramLabel.textContent = `${metricLabel} across population percentiles`;
+        populationChartHistogramLabel.textContent = histogramHelperText;
+    }
+
+    // Update bottom-left chart title and label
+    let latMetricTitle;
+    if (overlayMode === 'cf') {
+        latMetricTitle = 'Capacity Factor by latitude';
+    } else if (overlayMode === 'lcoe') {
+        latMetricTitle = 'LCOE by latitude';
+    } else {
+        latMetricTitle = `${metricLabel} by latitude`;
+    }
+
+    if (populationChartLatMetricTitle) {
+        populationChartLatMetricTitle.textContent = latMetricTitle;
     }
     if (populationChartMetricLabel) {
-        populationChartMetricLabel.textContent = `${metricLabel} by latitude`;
+        populationChartMetricLabel.textContent = `${scatterXAxisLabel} by latitude (weighted by ${weightDescriptor})`;
+    }
+
+    // Update bottom-right chart labels
+    const latPopTitle = weightDescriptor === 'population' ? 'Population share by latitude' : `${capitalizeWord(fuelDescriptor)} capacity share by latitude`;
+    const latPopHelper = weightDescriptor === 'population'
+        ? 'Each bar = % of global population in that latitude band'
+        : `Each bar = % of global ${fuelDescriptor} capacity in that latitude band`;
+
+    if (populationChartLatPopLabel) {
+        populationChartLatPopLabel.textContent = latPopTitle;
+    }
+    if (populationChartLatPopHelper) {
+        populationChartLatPopHelper.textContent = latPopHelper;
     }
 
     const chartsNeedRecreate = populationCharts.metric !== metricLabel;
@@ -838,7 +1133,7 @@ function renderPopulationCharts(metrics, overlayMode) {
             data: {
                 labels: histogram.labels,
                 datasets: [{
-                    label: metricLabel,
+                    label: yAxisLabel,
                     data: histogram.data,
                     backgroundColor: 'rgba(56, 189, 248, 0.45)',
                     borderColor: 'rgba(56, 189, 248, 1)',
@@ -857,27 +1152,29 @@ function renderPopulationCharts(metrics, overlayMode) {
                     }
                 },
                 scales: {
-                    x: { title: { display: true, text: 'Cumulative global population (%)' } },
-                    y: { title: { display: true, text: metricLabel } }
+                    x: { title: { display: true, text: xAxisLabel } },
+                    y: { title: { display: true, text: yAxisLabel } }
                 }
             }
         });
     } else {
         populationCharts.histogram.data.labels = histogram.labels;
-        populationCharts.histogram.data.datasets[0].label = metricLabel;
+        populationCharts.histogram.data.datasets[0].label = yAxisLabel;
         populationCharts.histogram.data.datasets[0].data = histogram.data;
-        populationCharts.histogram.options.scales.y.title.text = metricLabel;
+        populationCharts.histogram.options.scales.x.title.text = xAxisLabel;
+        populationCharts.histogram.options.scales.y.title.text = yAxisLabel;
         populationCharts.histogram.options.plugins.tooltip.callbacks.label = histogramTooltip;
         populationCharts.histogram.update();
     }
 
     const metricScatterData = metrics.map(m => ({ x: normalizeMetric(m.metric), y: m.latitude }));
+
     if (!populationCharts.latMetric) {
         populationCharts.latMetric = new ChartJS(populationChartLatMetric.getContext('2d'), {
             type: 'scatter',
             data: {
                 datasets: [{
-                    label: metricLabel,
+                    label: scatterXAxisLabel,
                     data: metricScatterData,
                     backgroundColor: 'rgba(52, 211, 153, 0.6)',
                     borderColor: 'rgba(52, 211, 153, 1)',
@@ -889,19 +1186,20 @@ function renderPopulationCharts(metrics, overlayMode) {
                 maintainAspectRatio: false,
                 plugins: { legend: { display: false } },
                 scales: {
-                    x: { title: { display: true, text: metricLabel } },
+                    x: { title: { display: true, text: scatterXAxisLabel } },
                     y: { title: { display: true, text: 'Latitude' }, min: -90, max: 90 }
                 }
             }
         });
     } else {
-        populationCharts.latMetric.data.datasets[0].label = metricLabel;
+        populationCharts.latMetric.data.datasets[0].label = scatterXAxisLabel;
         populationCharts.latMetric.data.datasets[0].data = metricScatterData;
-        populationCharts.latMetric.options.scales.x.title.text = metricLabel;
+        populationCharts.latMetric.options.scales.x.title.text = scatterXAxisLabel;
         populationCharts.latMetric.update();
     }
 
-    const popHistogram = buildPopulationLatitudeHistogram(metrics);
+    const popHistogram = buildWeightedLatitudeHistogram(metrics);
+    const descriptorLabel = weightDescriptor === 'population' ? 'Population' : `${capitalizeWord(fuelDescriptor)} capacity`;
 
     if (!populationCharts.latPop) {
         populationCharts.latPop = new ChartJS(populationChartLatPop.getContext('2d'), {
@@ -909,7 +1207,7 @@ function renderPopulationCharts(metrics, overlayMode) {
             data: {
                 labels: popHistogram.labels,
                 datasets: [{
-                    label: 'Population share (%)',
+                    label: `${descriptorLabel} share (%)`,
                     data: popHistogram.data,
                     backgroundColor: 'rgba(248, 180, 0, 0.65)',
                     borderColor: 'rgba(251, 191, 36, 1)',
@@ -926,7 +1224,7 @@ function renderPopulationCharts(metrics, overlayMode) {
                         callbacks: {
                             label: (ctx) => {
                                 const val = ctx?.parsed?.x;
-                                return Number.isFinite(val) ? `${val.toFixed(2)}% of global population` : '--';
+                                return Number.isFinite(val) ? `${val.toFixed(2)}% of global ${weightDescriptor}` : '--';
                             }
                         }
                     }
@@ -934,7 +1232,7 @@ function renderPopulationCharts(metrics, overlayMode) {
                 scales: {
                     x: {
                         beginAtZero: true,
-                        title: { display: true, text: 'Share of global population (%)' }
+                        title: { display: true, text: `Share of global ${weightDescriptor} (%)` }
                     },
                     y: {
                         title: { display: true, text: 'Latitude band (°)' },
@@ -945,7 +1243,13 @@ function renderPopulationCharts(metrics, overlayMode) {
         });
     } else {
         populationCharts.latPop.data.labels = popHistogram.labels;
+        populationCharts.latPop.data.datasets[0].label = `${descriptorLabel} share (%)`;
         populationCharts.latPop.data.datasets[0].data = popHistogram.data;
+        populationCharts.latPop.options.scales.x.title.text = `Share of global ${weightDescriptor} (%)`;
+        populationCharts.latPop.options.plugins.tooltip.callbacks.label = (ctx) => {
+            const val = ctx?.parsed?.x;
+            return Number.isFinite(val) ? `${val.toFixed(2)}% of global ${weightDescriptor}` : '--';
+        };
         populationCharts.latPop.update();
     }
 }
@@ -977,6 +1281,20 @@ async function init() {
             console.error("Voronoi geojson load failed:", err);
             voronoiGeojson = null;
         }
+        try {
+            fossilPlants = await loadFossilPlantsCsv();
+        } catch (err) {
+            console.error("Fossil plant CSV load failed:", err);
+            fossilPlants = [];
+        }
+        try {
+            fossilCapacity = await loadVoronoiFossilCapacityCsv();
+            fossilCapacityMap = new Map(fossilCapacity.map(row => [row.location_id, row]));
+        } catch (err) {
+            console.error("Fossil capacity CSV load failed:", err);
+            fossilCapacity = [];
+            fossilCapacityMap = new Map();
+        }
 
         loadingStatus.textContent = "Processing...";
         console.log("Loaded summary data. Rows:", summaryData.length);
@@ -997,15 +1315,18 @@ function updateUI() {
         // Update Map with CF data
         updateMap(summaryData, currentSolar, currentBatt);
         legendPopulation?.classList.add('hidden');
+        legendFossilPlants?.classList.add('hidden');
     } else if (currentViewMode === 'lcoe') {
         updateLcoeView();
         legendPopulation?.classList.add('hidden');
+        legendFossilPlants?.classList.add('hidden');
     } else if (currentViewMode === 'population') {
         updatePopulationView();
         legendPopulation?.classList.remove('hidden');
     } else {
         // Sample mode
         legendPopulation?.classList.add('hidden');
+        legendFossilPlants?.classList.add('hidden');
     }
 }
 
@@ -1064,7 +1385,7 @@ function updateLcoeView() {
 }
 
 function refreshActiveLcoeView() {
-    if (currentViewMode === 'population' && populationOverlaySelect?.value === 'lcoe') {
+    if (currentViewMode === 'population' && populationOverlayMode === 'lcoe') {
         updatePopulationView();
     } else {
         updateLcoeView();
@@ -1073,7 +1394,7 @@ function refreshActiveLcoeView() {
 
 async function handleLocationSelect(locationData) {
     currentLocationId = locationData?.location_id ?? null;
-    const isPopulationLcoe = currentViewMode === 'population' && populationOverlaySelect?.value === 'lcoe';
+    const isPopulationLcoe = currentViewMode === 'population' && populationOverlayMode === 'lcoe';
     if ((currentViewMode === 'lcoe' || isPopulationLcoe) && locationData) {
         lcoeReference = locationData;
         refreshActiveLcoeView();
@@ -1083,6 +1404,12 @@ async function handleLocationSelect(locationData) {
 function switchViewMode(mode) {
     setViewModeExplanation(mode);
     currentViewMode = mode;
+
+    // Sync chart view mode dropdown with main selector
+    if (viewModeChartSelect && viewModeChartSelect.value !== mode) {
+        viewModeChartSelect.value = mode;
+    }
+
     cleanupSampleDays();
     if (mode !== 'population' && locationPanelShowingChartSummary) {
         resetLocationPanelAfterChartSummary();
@@ -1181,6 +1508,10 @@ if (populationBattSlider) {
     if (populationBattVal) populationBattVal.textContent = currentBatt;
 }
 updatePopulationDisplayToggleUI();
+updatePopulationOverlayToggleUI();
+updatePopulationBaseToggleUI();
+updatePopulationFuelToggleUI();
+updateChartMetricToggleUI();
 updatePopulationViewHelperCopy();
 
 // Event Listeners
@@ -1248,12 +1579,10 @@ targetCfSlider.addEventListener('input', (e) => {
 function updatePopulationView() {
     if (!populationData.length) return;
     const isChartMode = populationDisplayMode === 'charts';
-    const overlayMode = isChartMode ? (populationChartMetric === 'lcoe' ? 'lcoe' : 'cf') : populationOverlayMode;
-    if (isChartMode) {
-        setOverlaySelectVisibility(false);
-    } else {
-        setOverlaySelectVisibility(true);
-    }
+    const baseLayer = populationBaseLayer;
+    const overlayMode = populationOverlayMode;
+    const selectedFuelsArr = Array.from(populationFuelFilter);
+    const selectedFuelSet = selectedFuelsArr.length ? new Set(selectedFuelsArr) : new Set(ALL_FUELS);
     updatePopulationOverlayControls(overlayMode);
 
     // Combine population with coordinates from summary
@@ -1261,11 +1590,13 @@ function updatePopulationView() {
         const coords = summaryCoordIndex.get(coordKey(p.latitude, p.longitude)) || populationCoordIndex.get(coordKey(p.latitude, p.longitude)) || {};
         const lat = Number.isFinite(coords.latitude) ? coords.latitude : p.latitude;
         const lon = Number.isFinite(coords.longitude) ? coords.longitude : p.longitude;
+        const locId = Number.isFinite(coords.location_id) ? Number(coords.location_id) : (Number.isFinite(p.location_id) ? Number(p.location_id) : null);
         return {
             ...p,
             latitude: lat,
             longitude: lon,
-            annual_cf: coords.annual_cf
+            annual_cf: coords.annual_cf,
+            location_id: locId
         };
     }).filter(p => Number.isFinite(p.latitude) && Number.isFinite(p.longitude));
 
@@ -1284,33 +1615,51 @@ function updatePopulationView() {
         legendCapacity.classList.add('hidden');
         legendLcoe.classList.add('hidden');
     }
-    // Always use dual-layer approach to show population underneath
-    updatePopulationLegend(enriched, overlayMode);
+    if (baseLayer === 'population') {
+        updatePopulationLegend(enriched, overlayMode);
+    } else {
+        legendPopulation?.classList.add('hidden');
+    }
     if (isChartMode) {
+        legendFossilPlants?.classList.add('hidden');
         setLocationPanelChartSummary();
         legendPopulation?.classList.add('hidden');
         legendCapacity?.classList.add('hidden');
         legendLcoe?.classList.add('hidden');
         showPopulationChartsOnly();
-        const metrics = buildPopulationMetrics(
-            enriched,
-            overlayMode,
-            cfFiltered,
-            overlayMode === 'lcoe' && lcoeDisplay ? lcoeDisplay.resultsWithDelta : lcoeResults
-        );
-        renderPopulationCharts(metrics, overlayMode);
+        const lcoeSource = overlayMode === 'lcoe' && lcoeDisplay ? lcoeDisplay.resultsWithDelta : lcoeResults;
+        const metrics = baseLayer === 'plants'
+            ? buildPlantMetrics(fossilCapacity, overlayMode, cfFiltered, lcoeSource, selectedFuelSet)
+            : buildPopulationMetrics(enriched, overlayMode, cfFiltered, lcoeSource);
+        renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels: selectedFuelSet });
     } else {
         resetLocationPanelAfterChartSummary();
-        legendPopulation?.classList.remove('hidden');
+        if (baseLayer === 'population') {
+            legendPopulation?.classList.remove('hidden');
+            legendFossilPlants?.classList.add('hidden');
+        } else {
+            legendPopulation?.classList.add('hidden');
+            legendFossilPlants?.classList.remove('hidden');
+        }
         showMapContainerOnly();
+        const filteredPlants = baseLayer === 'plants'
+            ? fossilPlants.filter(p => selectedFuelSet.has(p.fuel_group))
+            : [];
         updatePopulationSimple(enriched, {
+            baseLayer,
+            selectedFuels: Array.from(selectedFuelSet),
             overlayMode,
             cfData: overlayMode === 'cf' ? cfFiltered : [],
             lcoeData: overlayMode === 'lcoe' && lcoeDisplay ? lcoeDisplay.resultsWithDelta : [],
             lcoeColorInfo: overlayMode === 'lcoe' ? lcoeDisplay?.colorInfo : null,
             targetCf: lcoeParams.targetCf,
-            comparisonMetric
+            comparisonMetric,
+            fossilPlants: filteredPlants,
+            fossilCapacityMap: baseLayer === 'plants' ? fossilCapacityMap : null
         });
+        if (baseLayer !== 'plants') {
+            legendFossilPlants?.classList.add('hidden');
+        }
     }
 }
 
@@ -1320,10 +1669,31 @@ populationOverlayButtons.forEach(btn => {
         if (mode === populationOverlayMode) return;
         populationOverlayMode = mode;
         updatePopulationOverlayToggleUI();
+        updateChartOverlayToggleUI();
         updatePopulationOverlayControls(mode);
+        if (mode === 'cf' || mode === 'lcoe') {
+            populationChartMetric = mode;
+            updateChartMetricToggleUI();
+        }
         if (currentViewMode === 'population') {
             updatePopulationView();
         }
+    });
+});
+
+populationBaseButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+        const mode = btn.dataset.base || 'population';
+        if (mode === populationBaseLayer) return;
+        setPopulationBaseLayer(mode);
+    });
+});
+
+populationFuelButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+        const fuel = btn.dataset.fuel;
+        if (!fuel) return;
+        togglePopulationFuel(fuel);
     });
 });
 
@@ -1337,6 +1707,37 @@ populationChartMetricButtons.forEach(btn => {
     btn.addEventListener('click', () => {
         setPopulationChartMetric(btn.dataset.metric);
     });
+});
+
+populationChartLayerButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+        setPopulationBaseLayer(btn.dataset.layer);
+    });
+});
+
+populationChartOverlayButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+        const mode = btn.dataset.overlay || 'none';
+        if (mode === populationOverlayMode) return;
+        populationOverlayMode = mode;
+        updatePopulationOverlayToggleUI();
+        updateChartOverlayToggleUI();
+        updatePopulationOverlayControls(mode);
+        if (mode === 'cf' || mode === 'lcoe') {
+            populationChartMetric = mode;
+            updateChartMetricToggleUI();
+        }
+        if (currentViewMode === 'population') {
+            updatePopulationView();
+        }
+    });
+});
+
+viewModeChartSelect?.addEventListener('change', (e) => {
+    const mode = e.target.value;
+    if (mode && mode !== currentViewMode) {
+        switchViewMode(mode);
+    }
 });
 
 populationChartsCta?.addEventListener('click', () => {

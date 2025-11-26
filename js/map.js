@@ -10,6 +10,13 @@ let sampleLocationHandler = null;
 let populationOverlay = false;
 let populationData = null;
 let populationScale = null;
+const ALL_FOSSIL_FUELS = ['coal','gas','oil'];
+
+// Helper function
+function capitalizeWord(str = '') {
+    if (!str) return '';
+    return str.charAt(0).toUpperCase() + str.slice(1);
+}
 
 // Color scale for Capacity Factor (0.0 to 1.0)
 const colorScale = d3.scaleLinear()
@@ -21,6 +28,12 @@ const colorScale = d3.scaleLinear()
 function getColor(cf) {
     return colorScale(cf);
 }
+
+const FOSSIL_COLORS = {
+    coal: '#f97316',
+    gas: '#38bdf8',
+    oil: '#f43f5e'
+};
 
 function buildPopulationScale(values) {
     const valid = values.filter(Number.isFinite);
@@ -484,7 +497,7 @@ function roundedKey(lat, lon, decimals = 4) {
     return `${lat.toFixed(decimals)},${lon.toFixed(decimals)}`;
 }
 
-export function updatePopulationSimple(popData, { overlayMode = 'none', cfData = [], lcoeData = [], lcoeColorInfo = null, targetCf = null, comparisonMetric = 'lcoe' } = {}) {
+export function updatePopulationSimple(popData, { baseLayer = 'population', overlayMode = 'none', cfData = [], lcoeData = [], lcoeColorInfo = null, targetCf = null, comparisonMetric = 'lcoe', fossilPlants = [], fossilCapacityMap = null, selectedFuels = ALL_FOSSIL_FUELS } = {}) {
     currentMode = 'population';
     lastPopulationData = popData;
     selectedMarker = null;
@@ -495,6 +508,25 @@ export function updatePopulationSimple(popData, { overlayMode = 'none', cfData =
 
     if (!popData || popData.length === 0) return;
 
+    const capacityMap = fossilCapacityMap instanceof Map ? fossilCapacityMap : null;
+    const formatCapacityLines = (cap) => {
+        if (!cap || !selectedFuelSet.size) {
+            return baseLayer === 'plants' ? '<div class="mt-1 text-slate-500">No installed capacity for the selected fuels.</div>' : '';
+        }
+        const lines = [];
+        selectedFuelSet.forEach(fuel => {
+            const value = Number(cap[`${fuel}_mw`] || 0);
+            if (value > 0) {
+                lines.push(`<div>${capitalizeWord(fuel)}: ${formatNumber(value, 0)} MW</div>`);
+            }
+        });
+        if (!lines.length) {
+            return baseLayer === 'plants' ? '<div class="mt-1 text-slate-500">No installed capacity for the selected fuels.</div>' : '';
+        }
+        return `<div class="mt-1 text-slate-500">Installed capacity<br>${lines.join('')}</div>`;
+    };
+
+    const selectedFuelSet = new Set((selectedFuels && selectedFuels.length ? selectedFuels : ALL_FOSSIL_FUELS).map(f => f.toLowerCase()));
     const popValues = popData.map(p => p.population_2020 || 0);
     const scale = buildPopulationScale(popValues);
     const cfByCoord = new Map(cfData.map(d => [roundedKey(d.latitude, d.longitude), d]));
@@ -512,6 +544,8 @@ export function updatePopulationSimple(popData, { overlayMode = 'none', cfData =
         const key = roundedKey(d.latitude, d.longitude);
         const cfRow = cfByCoord.get(key);
         const lcoeRow = lcoeByCoord.get(key);
+        const capacity = capacityMap && d.location_id != null ? capacityMap.get(Number(d.location_id)) : null;
+        const capacityLines = formatCapacityLines(capacity);
 
         // Determine overlay color and data
         let overlayColor = null;
@@ -524,8 +558,8 @@ export function updatePopulationSimple(popData, { overlayMode = 'none', cfData =
             overlayData = lcoeRow;
         }
 
-        // Only show population dots when there's no overlay
-        if (overlayMode === 'none') {
+        const showPopulationDots = baseLayer === 'population' && overlayMode === 'none';
+        if (showPopulationDots) {
             L.circleMarker([d.latitude, d.longitude], {
                 radius: 0.8,
                 fillColor: popColor,
@@ -539,19 +573,24 @@ export function updatePopulationSimple(popData, { overlayMode = 'none', cfData =
         }
         // No dots for CF or LCOE overlays - only Voronoi cells
 
-        const marker = L.circleMarker([d.latitude, d.longitude], {
-            radius: 4.5,
-            fillColor: '#fff',
-            color: '#fff',
-            weight: 0,
-            opacity: 0,
-            fillOpacity: 0,
-            pane: 'markers'
-        });
+        const populationLine = baseLayer === 'population'
+            ? `<div class="mt-1 text-slate-400">Population: ${formatNumber(d.population_2020 || 0, 0)}</div>`
+            : '';
+        const shouldShowHitMarker = baseLayer === 'population' || overlayMode !== 'none';
+        if (shouldShowHitMarker) {
+            const marker = L.circleMarker([d.latitude, d.longitude], {
+                radius: 4.5,
+                fillColor: '#fff',
+                color: '#fff',
+                weight: 0,
+                opacity: 0,
+                fillOpacity: 0,
+                pane: 'markers'
+            });
 
-        marker.on('mouseover', () => {
-            let content;
-            if (overlayMode === 'lcoe' && overlayData) {
+            marker.on('mouseover', () => {
+                let content;
+                if (overlayMode === 'lcoe' && overlayData) {
                 const valueLine = overlayData.meetsTarget
                     ? `LCOE: ${overlayData.lcoe ? formatCurrency(overlayData.lcoe) : '--'}/MWh`
                     : `LCOE: ${overlayData.maxConfigLcoe ? `>${formatCurrency(overlayData.maxConfigLcoe)}` : '--'}/MWh`;
@@ -584,49 +623,91 @@ export function updatePopulationSimple(popData, { overlayMode = 'none', cfData =
                     <div class="font-semibold">${valueLine}</div>
                     <div>CF ${(overlayData.annual_cf * 100).toFixed(1)}% | Solar ${overlayData.solar_gw} GW_DC | Battery ${overlayData.batt_gwh} GWh</div>
                     ${infoLines}
-                    <div class="mt-1 text-slate-400">Population: ${formatNumber(d.population_2020 || 0, 0)}</div>
+                    ${populationLine}
+                    ${capacityLines}
                  </div>`;
             } else if (overlayMode === 'cf' && overlayData) {
                 content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
                     <div class="font-semibold">CF: ${(overlayData.annual_cf * 100).toFixed(1)}%</div>
-                    <div class="mt-1 text-slate-400">Population: ${formatNumber(d.population_2020 || 0, 0)}</div>
+                    ${populationLine}
+                    ${capacityLines}
                  </div>`;
             } else {
+                const baseInfo = populationLine || '<div class="mt-1 text-slate-400">Installed capacity summary:</div>';
                 content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
-                    <div class="font-semibold">Population: ${formatNumber(d.population_2020 || 0, 0)}</div>
+                    ${baseInfo}
+                    ${capacityLines}
                  </div>`;
             }
-            sharedPopup.setLatLng([d.latitude, d.longitude]).setContent(content).openOn(map);
-        });
+                sharedPopup.setLatLng([d.latitude, d.longitude]).setContent(content).openOn(map);
+            });
 
-        marker.on('mouseout', () => {
-            map.closePopup(sharedPopup);
-        });
+            marker.on('mouseout', () => {
+                map.closePopup(sharedPopup);
+            });
 
-        marker.on('click', () => {
-            if (selectedMarker) {
-                selectedMarker.setStyle({ stroke: false, color: '#000', weight: 1, radius: 4 });
-            }
-            marker.setStyle({ color: '#fff', weight: 2, radius: 6 });
-            selectedMarker = marker;
+            marker.on('click', () => {
+                if (selectedMarker) {
+                    selectedMarker.setStyle({ stroke: false, color: '#000', weight: 1, radius: 4 });
+                }
+                marker.setStyle({ color: '#fff', weight: 2, radius: 6 });
+                selectedMarker = marker;
 
-            updateLocationPanel({
-                ...d,
-                ...(overlayData || {}),
-                population_2020: d.population_2020,
-                targetCf,
-                comparisonMetric
-            }, overlayColor || popColor, overlayMode === 'lcoe' ? 'lcoe' : overlayMode === 'cf' ? 'capacity' : 'population');
+                updateLocationPanel({
+                    ...d,
+                    ...(overlayData || {}),
+                    population_2020: d.population_2020,
+                    targetCf,
+                    comparisonMetric
+                }, overlayColor || popColor, overlayMode === 'lcoe' ? 'lcoe' : overlayMode === 'cf' ? 'capacity' : 'population');
 
-            if (map.onLocationSelect) {
-                map.onLocationSelect({ ...d, ...overlayData, population_2020: d.population_2020 }, overlayMode === 'lcoe' ? 'lcoe' : overlayMode === 'cf' ? 'capacity' : 'population');
-            }
-        });
+                if (map.onLocationSelect) {
+                    map.onLocationSelect({ ...d, ...overlayData, population_2020: d.population_2020 }, overlayMode === 'lcoe' ? 'lcoe' : overlayMode === 'cf' ? 'capacity' : 'population');
+                }
+            });
 
-        marker.addTo(markersLayer);
+            marker.addTo(markersLayer);
+        }
     });
 
-    // render voronoi fill using population color, plus optional overlay
+    const filteredPlants = baseLayer === 'plants' && Array.isArray(fossilPlants)
+        ? fossilPlants.filter(plant => selectedFuelSet.has(plant.fuel_group))
+        : [];
+
+    if (filteredPlants.length) {
+        const plantPopup = L.popup({
+            closeButton: false,
+            autoPan: false,
+            className: 'bg-transparent border-none shadow-none'
+        });
+        filteredPlants.forEach(plant => {
+            if (!Number.isFinite(plant.latitude) || !Number.isFinite(plant.longitude)) return;
+            const color = FOSSIL_COLORS[plant.fuel_group] || '#e2e8f0';
+            const baseCapacity = Number.isFinite(plant.capacity_mw) ? Math.max(plant.capacity_mw, 0) : 0;
+            const radius = Math.max(2, Math.min(12, Math.sqrt(baseCapacity) * 0.15));
+            const marker = L.circleMarker([plant.latitude, plant.longitude], {
+                radius,
+                fillColor: color,
+                color,
+                weight: 0,
+                opacity: 1,
+                fillOpacity: 0.3,
+                pane: 'markers'
+            });
+            marker.on('mouseover', () => {
+                const cap = formatNumber(baseCapacity, 0);
+                const content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
+                    <div class="font-semibold">${plant.plant_name || 'Power plant'}</div>
+                    <div>${plant.fuel_group.toUpperCase()} • ${cap} MW</div>
+                    <div class="text-slate-400">${plant.country || 'Unknown'}</div>
+                 </div>`;
+                plantPopup.setLatLng([plant.latitude, plant.longitude]).setContent(content).openOn(map);
+            });
+            marker.on('mouseout', () => map.closePopup(plantPopup));
+            marker.addTo(overlayLayer);
+        });
+    }
+
     const mapPoints = popData.map(d => {
         const point = map.latLngToLayerPoint([d.latitude, d.longitude]);
         return [point.x, point.y];
@@ -644,12 +725,16 @@ export function updatePopulationSimple(popData, { overlayMode = 'none', cfData =
         return null;
     };
 
-    renderVoronoiDual(
-        mapPoints,
-        popData,
-        (row) => scale(row.population_2020 || 0),
-        overlayMode === 'none' ? null : overlayAccessor
-    );
+    const renderBasePolygons = baseLayer === 'population';
+    const renderOverlay = overlayMode !== 'none';
+    if (renderBasePolygons || renderOverlay) {
+        renderVoronoiDual(
+            mapPoints,
+            popData,
+            renderBasePolygons ? (row => scale(row.population_2020 || 0)) : null,
+            renderOverlay ? overlayAccessor : null
+        );
+    }
 }
 
 function renderVoronoiDual(mapPoints, data, baseFill, overlayFill) {
@@ -657,6 +742,10 @@ function renderVoronoiDual(mapPoints, data, baseFill, overlayFill) {
     svg.selectAll("*").remove();
 
     if (mapPoints.length <= 1) return;
+
+    const hasBase = typeof baseFill === 'function';
+    const hasOverlay = typeof overlayFill === 'function';
+    if (!hasBase && !hasOverlay) return;
 
     let path = null;
     if (worldGeoJSON) {
@@ -685,20 +774,22 @@ function renderVoronoiDual(mapPoints, data, baseFill, overlayFill) {
     const delaunay = d3.Delaunay.from(mapPoints);
     const voronoi = delaunay.voronoi(bounds);
 
-    const base = svg.append("g").attr("clip-path", clip);
-    base
-        .selectAll("path")
-        .data(data)
-        .enter()
-        .append("path")
-        .attr("d", (_, i) => voronoi.renderCell(i))
-        .attr("fill", d => baseFill ? baseFill(d) : "#111827")
-        .attr("fill-opacity", 0.85)
-        .attr("stroke", "rgba(255,255,255,0.08)")
-        .attr("stroke-width", 0.5)
-        .style("pointer-events", "none");
+    if (hasBase) {
+        const base = svg.append("g").attr("clip-path", clip);
+        base
+            .selectAll("path")
+            .data(data)
+            .enter()
+            .append("path")
+            .attr("d", (_, i) => voronoi.renderCell(i))
+            .attr("fill", d => baseFill ? baseFill(d) : "#111827")
+            .attr("fill-opacity", 0.85)
+            .attr("stroke", "rgba(255,255,255,0.08)")
+            .attr("stroke-width", 0.5)
+            .style("pointer-events", "none");
+    }
 
-    if (overlayFill) {
+    if (hasOverlay) {
         svg
             .append("g")
             .attr("clip-path", clip)

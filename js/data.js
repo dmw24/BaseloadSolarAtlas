@@ -1,4 +1,3 @@
-
 import { readParquet } from './parquet_wasm.js';
 
 // Initialize WASM
@@ -6,12 +5,7 @@ let wasmReady = false;
 
 async function initWasm() {
     if (wasmReady) return;
-    // parquet-wasm needs to load the .wasm file. 
-    // The CDN ESM build handles this usually, but sometimes needs explicit init.
-    // For 0.6.1 ESM, we might need to import the default export and call it.
-    // Let's try the simplest path first.
     console.log("Initializing Parquet-Wasm...");
-    // Dynamic import to ensure it loads
     const wasm = await import('./parquet_wasm.js');
     await wasm.default();
     wasmReady = true;
@@ -26,28 +20,14 @@ export async function loadSummary() {
     try {
         const wasm = await import('./parquet_wasm.js');
         await wasm.default();
-        console.log("Wasm 0.7.1 loaded locally.");
-
-        // Read parquet to Arrow Table
         const wasmTable = wasm.readParquet(new Uint8Array(buffer));
         const table = wasmTable.intoIPCStream();
-        console.log("Read Parquet result:", table);
-        console.log("Result type:", typeof table);
-        if (table) {
-            console.log("Result constructor:", table.constructor.name);
-            console.log("Result byteLength:", table.byteLength);
-        }
-
         const { tableFromIPC } = await import('./apache-arrow.js');
-
         const arrowTable = tableFromIPC(table);
-        console.log("Arrow Table created.");
-
         const data = [];
         for (const row of arrowTable) {
             data.push(row.toJSON());
         }
-        console.log("Data parsed. Rows:", data.length);
         return data;
     } catch (e) {
         console.error("Error in loadSummary:", e);
@@ -55,12 +35,7 @@ export async function loadSummary() {
     }
 }
 
-export async function loadPopulationCsv() {
-    const response = await fetch('data/voronoi_population_2020.csv');
-    if (!response.ok) {
-        throw new Error('Population CSV not found at data/voronoi_population_2020.csv');
-    }
-    const text = await response.text();
+function parseCsv(text) {
     const lines = text.trim().split(/\r?\n/);
     const header = lines.shift();
     if (!header) return [];
@@ -71,12 +46,55 @@ export async function loadPopulationCsv() {
         cols.forEach((c, idx) => {
             row[c] = parts[idx];
         });
-        return {
-            latitude: Number(row.latitude),
-            longitude: Number(row.longitude),
-            population_2020: Number(row.population_2020)
-        };
+        return row;
     });
+}
+
+export async function loadPopulationCsv() {
+    const response = await fetch('data/voronoi_population_2020.csv');
+    if (!response.ok) {
+        throw new Error('Population CSV not found at data/voronoi_population_2020.csv');
+    }
+    const rows = parseCsv(await response.text());
+    return rows.map(row => ({
+        latitude: Number(row.latitude),
+        longitude: Number(row.longitude),
+        population_2020: Number(row.population_2020)
+    }));
+}
+
+export async function loadFossilPlantsCsv() {
+    const response = await fetch('data/fossil_plants.csv');
+    if (!response.ok) {
+        throw new Error('Fossil plant CSV not found at data/fossil_plants.csv');
+    }
+    const rows = parseCsv(await response.text());
+    return rows
+        .map(row => ({
+            plant_name: row.plant_name || '',
+            country: row.country || '',
+            fuel_group: (row.fuel_group || '').toLowerCase(),
+            capacity_mw: Number(row.capacity_mw),
+            latitude: Number(row.latitude),
+            longitude: Number(row.longitude)
+        }))
+        .filter(p => Number.isFinite(p.latitude) && Number.isFinite(p.longitude));
+}
+
+export async function loadVoronoiFossilCapacityCsv() {
+    const response = await fetch('data/voronoi_fossil_capacity.csv');
+    if (!response.ok) {
+        throw new Error('Voronoi fossil capacity CSV not found at data/voronoi_fossil_capacity.csv');
+    }
+    const rows = parseCsv(await response.text());
+    return rows.map(row => ({
+        location_id: Number(row.location_id),
+        latitude: Number(row.latitude),
+        longitude: Number(row.longitude),
+        coal_mw: Number(row.coal_mw),
+        gas_mw: Number(row.gas_mw),
+        oil_mw: Number(row.oil_mw)
+    }));
 }
 
 export async function loadVoronoiGeojson() {
@@ -99,17 +117,12 @@ export async function loadSample(solarGw, battGwh) {
 
     const buffer = await response.arrayBuffer();
     const wasm = await import('./parquet_wasm.js');
-    // await wasm.default(); 
-
     const { tableFromIPC } = await import('./apache-arrow.js');
 
     const wasmTable = wasm.readParquet(new Uint8Array(buffer));
     const table = wasmTable.intoIPCStream();
     const arrowTable = tableFromIPC(table);
 
-    // Convert to array of objects
-    // Each row is: { location_id, season, timestamps, solar_gen, ... }
-    // Note: timestamps/solar_gen are Lists (Vectors). Arrow handles this.
     const data = [];
     for (const row of arrowTable) {
         data.push(row.toJSON());

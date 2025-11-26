@@ -200,14 +200,34 @@
                     </div>
                     <div id="population-toggle" class="hidden pt-2 border-t border-slate-700/60">
                         <p id="population-overlay-helper" class="text-[11px] text-slate-400 mb-3 leading-relaxed">
-                            Population is always shown as the base layer; choose which metric determines the colour of each cell.
+                            Choose a base layer (population density or fossil plant bubbles), optionally filter by fuel type, and add a CF or LCOE overlay if needed.
                         </p>
-                        <div id="population-overlay-select-wrapper" class="space-y-2">
+                        <div id="population-overlay-select-wrapper" class="space-y-3">
                             <label class="text-xs text-slate-400 mb-1">Display data</label>
-                            <div id="population-overlay-mode" class="grid grid-cols-3 rounded-lg bg-slate-800 border border-slate-700 overflow-hidden text-sm">
-                                <button data-overlay="none" class="px-2 py-2 text-center font-semibold bg-slate-700 text-slate-100">Population</button>
-                                <button data-overlay="cf" class="px-2 py-2 text-center font-semibold text-slate-300 hover:bg-slate-700/60">CF</button>
-                                <button data-overlay="lcoe" class="px-2 py-2 text-center font-semibold text-slate-300 hover:bg-slate-700/60">LCOE</button>
+                            <div class="space-y-3">
+                                <div>
+                                    <div class="text-[10px] text-slate-500 uppercase mb-1.5">Base layer</div>
+                                    <div id="population-base-toggle" class="grid grid-cols-2 rounded-lg bg-slate-800 border border-slate-700 overflow-hidden text-sm">
+                                        <button data-base="population" class="px-2 py-2 text-center font-semibold bg-slate-700 text-slate-100">Population</button>
+                                        <button data-base="plants" class="px-2 py-2 text-center font-semibold text-slate-300 hover:bg-slate-700/60">Fossil plants</button>
+                                    </div>
+                                    <div id="population-fuel-filter" class="hidden mt-2 space-y-1">
+                                        <div class="text-[10px] text-slate-500 uppercase">Fuels</div>
+                                        <div class="grid grid-cols-3 rounded-lg bg-slate-800 border border-slate-700 overflow-hidden text-sm">
+                                            <button data-fuel="coal" class="px-2 py-2 text-center font-semibold bg-slate-700 text-slate-100">Coal</button>
+                                            <button data-fuel="gas" class="px-2 py-2 text-center font-semibold text-slate-300 hover:bg-slate-700/60">Gas</button>
+                                            <button data-fuel="oil" class="px-2 py-2 text-center font-semibold text-slate-300 hover:bg-slate-700/60">Oil</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div class="text-[10px] text-slate-500 uppercase mb-1.5">Overlay</div>
+                                    <div id="population-overlay-mode" class="grid grid-cols-3 rounded-lg bg-slate-800 border border-slate-700 overflow-hidden text-sm">
+                                        <button data-overlay="none" class="px-2 py-2 text-center font-semibold bg-slate-700 text-slate-100">None</button>
+                                        <button data-overlay="cf" class="px-2 py-2 text-center font-semibold text-slate-300 hover:bg-slate-700/60">CF</button>
+                                        <button data-overlay="lcoe" class="px-2 py-2 text-center font-semibold text-slate-300 hover:bg-slate-700/60">LCOE</button>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         <div class="mt-4">
@@ -216,7 +236,7 @@
                                 <button data-mode="map" class="px-3 py-2 text-center font-semibold bg-slate-700 text-slate-100">Map</button>
                                 <button data-mode="charts" class="px-3 py-2 text-center font-semibold text-slate-300 hover:bg-slate-700/60">Charts</button>
                             </div>
-                            <p id="population-view-helper" class="text-[11px] text-slate-500 mt-2">Map mode shows every cell on the globe; Charts condense the same information by population percentile and latitude band.</p>
+                            <p id="population-view-helper" class="text-[11px] text-slate-500 mt-2">Map mode shows the selected base layer directly; Charts condense the same information by population percentile and latitude band.</p>
                             <button id="population-charts-cta" type="button" class="mt-2 text-[11px] w-full text-center text-sky-300 hover:text-sky-200 font-semibold">Switch between map and charts</button>
                         </div>
                         <div id="population-overlay-config" class="hidden space-y-4 mt-4 p-3 rounded-lg bg-slate-900/40 border border-slate-800/60">
@@ -298,7 +318,7 @@
                     <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 bg-slate-900/70 border border-slate-800 rounded-xl p-4">
                         <div>
                             <h3 class="text-sm font-semibold text-slate-100">Metric view</h3>
-                            <p class="text-[11px] text-slate-400">Choose which metric the charts summarize; you can still adjust the solar and storage controls in the sidebar.</p>
+                            <p class="text-[11px] text-slate-400">Choose metric; you can still adjust the solar and storage controls in the sidebar.</p>
                         </div>
                         <div id="population-chart-metric-toggle" class="grid grid-cols-2 rounded-lg bg-slate-800 border border-slate-700 overflow-hidden text-sm">
                             <button data-metric="cf" class="px-3 py-2 text-center font-semibold bg-slate-700 text-slate-100">Capacity factor</button>
@@ -307,7 +327,7 @@
                     </div>
                     <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 shadow-xl">
                         <div class="flex items-center justify-between mb-3">
-                            <h3 class="text-sm font-semibold text-slate-100">Metric by population percentile</h3>
+                            <h3 class="text-sm font-semibold text-slate-100" id="population-chart-histogram-title">Metric by population percentile</h3>
                             <div class="text-[11px] text-slate-500" id="population-chart-histogram-label">Capacity factor (%) across population percentiles</div>
                         </div>
                         <div class="h-52">
@@ -317,7 +337,7 @@
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 shadow-xl">
                             <div class="flex items-center justify-between mb-3">
-                                <h3 class="text-sm font-semibold text-slate-100">Metric by latitude (CF or LCOE)</h3>
+                                <h3 class="text-sm font-semibold text-slate-100" id="population-chart-lat-metric-title">Metric by latitude (CF or LCOE)</h3>
                                 <div class="text-[11px] text-slate-500" id="population-chart-metric-label">Capacity factor (%) vs latitude</div>
                             </div>
                             <div class="h-64">
@@ -326,8 +346,8 @@
                         </div>
                         <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-4 shadow-xl">
                             <div class="flex items-center justify-between mb-3">
-                                <h3 class="text-sm font-semibold text-slate-100">Population share by latitude</h3>
-                                <div class="text-[11px] text-slate-500">Each bar = % of global population in that latitude band</div>
+                                <h3 class="text-sm font-semibold text-slate-100" id="population-chart-lat-pop-label">Population share by latitude</h3>
+                                <div class="text-[11px] text-slate-500" id="population-chart-lat-pop-helper">Each bar = % of global population in that latitude band</div>
                             </div>
                             <div class="h-64">
                                 <canvas id="population-chart-lat-pop"></canvas>
@@ -390,6 +410,21 @@
                 <div class="text-[11px] text-slate-400 mt-2 space-y-1">
                     <div>Base: population density (darker = denser).</div>
                     <div id="legend-pop-layer-note" class="text-slate-300">Color: capacity factor map.</div>
+                </div>
+                <div id="legend-fossil-plants" class="hidden mt-3 text-[10px] text-slate-400 space-y-1">
+                    <div class="uppercase tracking-wide text-[9px] text-slate-500">Fossil plants</div>
+                    <div class="flex items-center gap-2">
+                        <span class="inline-block w-3 h-3 rounded-full" style="background-color:#f97316"></span>
+                        <span>Coal</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="inline-block w-3 h-3 rounded-full" style="background-color:#38bdf8"></span>
+                        <span>Gas</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="inline-block w-3 h-3 rounded-full" style="background-color:#f43f5e"></span>
+                        <span>Oil</span>
+                    </div>
                 </div>
             </div>
 

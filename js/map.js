@@ -10,7 +10,7 @@ let sampleLocationHandler = null;
 let populationOverlay = false;
 let populationData = null;
 let populationScale = null;
-const ALL_FOSSIL_FUELS = ['coal','gas','oil'];
+const ALL_FOSSIL_FUELS = ['coal', 'gas', 'oil'];
 
 // Helper function
 function capitalizeWord(str = '') {
@@ -591,54 +591,51 @@ export function updatePopulationSimple(popData, { baseLayer = 'population', over
             marker.on('mouseover', () => {
                 let content;
                 if (overlayMode === 'lcoe' && overlayData) {
-                const valueLine = overlayData.meetsTarget
-                    ? `LCOE: ${overlayData.lcoe ? formatCurrency(overlayData.lcoe) : '--'}/MWh`
-                    : `LCOE: ${overlayData.maxConfigLcoe ? `>${formatCurrency(overlayData.maxConfigLcoe)}` : '--'}/MWh`;
-                let infoLines = '';
-                if (overlayData.meetsTarget) {
-                    if (lcoeColorInfo?.type === 'tx' && overlayData.txMetrics) {
-                        const deltaLine = Number.isFinite(overlayData.delta)
-                            ? `<div>Cost delta vs reference: ${overlayData.delta >= 0 ? '+' : '-'}${formatCurrency(Math.abs(overlayData.delta), 2)}/MWh</div>`
-                            : '';
-                        const breakevenGw = `${formatCurrency(overlayData.txMetrics.breakevenPerGw)}/GW`;
-                        const breakevenGwKm = `${formatCurrency(overlayData.txMetrics.breakevenPerGwKm)}/GW/km`;
-                        const savingsLine = overlayData.txMetrics.savingsPerMwh > 0
-                            ? `<div>Captured savings: ${formatCurrency(overlayData.txMetrics.savingsPerMwh, 2)}/MWh @ CF ${(overlayData.annual_cf * 100).toFixed(1)}%</div>`
-                            : '';
-                        const distanceLine = Number.isFinite(overlayData.txMetrics.distanceKm)
-                            ? `<div>Approx. straight-line distance: ${formatNumber(overlayData.txMetrics.distanceKm, 0)} km</div>`
-                            : `<div>Approx. straight-line distance: --</div>`;
-                        infoLines = `${deltaLine}
-                            <div>Breakeven transmission: ${breakevenGw} (${breakevenGwKm})</div>
-                            ${savingsLine}
-                            ${distanceLine}`;
-                    } else if (lcoeColorInfo?.type === 'delta' && Number.isFinite(overlayData.delta)) {
-                        infoLines = `<div>Cost delta vs reference: ${overlayData.delta >= 0 ? '+' : '-'}${formatCurrency(Math.abs(overlayData.delta), 2)}/MWh</div>`;
+                    const valueLine = overlayData.meetsTarget
+                        ? `LCOE: ${overlayData.lcoe ? formatCurrency(overlayData.lcoe) : '--'}/MWh`
+                        : `LCOE: ${overlayData.maxConfigLcoe ? `>${formatCurrency(overlayData.maxConfigLcoe)}` : '--'}/MWh`;
+                    let infoLines = '';
+                    if (overlayData.meetsTarget) {
+                        if (lcoeColorInfo?.type === 'tx' && overlayData.txMetrics) {
+                            const deltaLine = Number.isFinite(overlayData.delta)
+                                ? `<div>Cost delta vs reference: ${overlayData.delta >= 0 ? '+' : '-'}${formatCurrency(Math.abs(overlayData.delta), 2)}/MWh</div>`
+                                : '';
+                            const breakevenGw = `${formatCurrency(overlayData.txMetrics.breakevenPerGw)}/GW`;
+                            const breakevenGwKm = `${formatCurrency(overlayData.txMetrics.breakevenPerGwKm)}/GW/km`;
+                            const savingsLine = overlayData.txMetrics.savingsPerMwh > 0
+                                ? `<div>Captured savings: ${formatCurrency(overlayData.txMetrics.savingsPerMwh, 2)}/MWh @ CF ${(overlayData.annual_cf * 100).toFixed(1)}%</div>`
+                                : '';
+                            const distanceLine = Number.isFinite(overlayData.txMetrics.distanceKm)
+                                ? `<div>Approx. straight-line distance: ${formatNumber(overlayData.txMetrics.distanceKm, 0)} km</div>`
+                                : `<div>Approx. straight-line distance: --</div>`;
+                            infoLines = `${deltaLine}\n${showTxCost ? `<div>Breakeven transmission: ${breakevenGw} (${breakevenGwKm})</div>` : ''}\n${savingsLine}\n${distanceLine}`;
+                        } else if (lcoeColorInfo?.type === 'delta' && Number.isFinite(overlayData.delta)) {
+                            infoLines = `<div>Cost delta vs reference: ${overlayData.delta >= 0 ? '+' : '-'}${formatCurrency(Math.abs(overlayData.delta), 2)}/MWh</div>`;
+                        }
+                    } else {
+                        infoLines += `<div class="text-amber-300">Target CF for 1&nbsp;GW baseload not met in this dataset.</div>`;
+                        infoLines += `<div>Highest config (${overlayData.maxConfigSolar ?? '--'} GW_DC, ${overlayData.maxConfigBatt ?? '--'} GWh)</div>`;
                     }
-                } else {
-                    infoLines += `<div class="text-amber-300">Target CF for 1&nbsp;GW baseload not met in this dataset.</div>`;
-                    infoLines += `<div>Highest config (${overlayData.maxConfigSolar ?? '--'} GW_DC, ${overlayData.maxConfigBatt ?? '--'} GWh)</div>`;
-                }
-                content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
+                    content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
                     <div class="font-semibold">${valueLine}</div>
                     <div>CF ${(overlayData.annual_cf * 100).toFixed(1)}% | Solar ${overlayData.solar_gw} GW_DC | Battery ${overlayData.batt_gwh} GWh</div>
                     ${infoLines}
                     ${populationLine}
                     ${capacityLines}
                  </div>`;
-            } else if (overlayMode === 'cf' && overlayData) {
-                content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
+                } else if (overlayMode === 'cf' && overlayData) {
+                    content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
                     <div class="font-semibold">CF: ${(overlayData.annual_cf * 100).toFixed(1)}%</div>
                     ${populationLine}
                     ${capacityLines}
                  </div>`;
-            } else {
-                const baseInfo = populationLine || '<div class="mt-1 text-slate-400">Installed capacity summary:</div>';
-                content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
+                } else {
+                    const baseInfo = populationLine || '<div class="mt-1 text-slate-400">Installed capacity summary:</div>';
+                    content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
                     ${baseInfo}
                     ${capacityLines}
                  </div>`;
-            }
+                }
                 sharedPopup.setLatLng([d.latitude, d.longitude]).setContent(content).openOn(map);
             });
 
@@ -786,6 +783,7 @@ function renderVoronoiDual(mapPoints, data, baseFill, overlayFill) {
             .attr("fill-opacity", 0.85)
             .attr("stroke", "rgba(255,255,255,0.08)")
             .attr("stroke-width", 0.5)
+            .attr("class", "transition-color")
             .style("pointer-events", "none");
     }
 
@@ -801,6 +799,7 @@ function renderVoronoiDual(mapPoints, data, baseFill, overlayFill) {
             .attr("fill", d => overlayFill(d) || "rgba(0,0,0,0)")
             .attr("fill-opacity", 0.35)
             .attr("stroke", "none")
+            .attr("class", "transition-color")
             .style("pointer-events", "none");
     }
 }
@@ -979,9 +978,9 @@ export function updateLcoeMap(bestData, options = {}) {
                         ? `<div>Approx. straight-line distance: ${formatNumber(txMetrics.distanceKm, 0)} km</div>`
                         : `<div>Approx. straight-line distance: --</div>`;
                     infoLines = `${deltaLine}
-                        <div>Breakeven transmission: ${breakevenGw} (${breakevenGwKm})</div>
-                        ${savingsLine}
-                        ${distanceLine}`;
+${window.showTxCost ? `<div>Breakeven transmission: ${breakevenGw} (${breakevenGwKm})</div>` : ''}
+${savingsLine}
+${distanceLine}`;
                 } else if (Number.isFinite(d.delta)) {
                     infoLines = `<div>Cost delta vs reference: ${d.delta >= 0 ? '+' : '-'}${formatCurrency(Math.abs(d.delta), 2)}/MWh</div>`;
                 }
@@ -1104,6 +1103,7 @@ function renderVoronoi(mapPoints, data, fillAccessor, options = {}) {
         .attr("fill-opacity", 0.6)
         .attr("stroke", "rgba(255,255,255,0.08)")
         .attr("stroke-width", 0.5)
+        .attr("class", "transition-color")
         .style("pointer-events", "all")
         .on("mouseover", (e, d) => {
             if (!enableHoverSelect) return;

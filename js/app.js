@@ -21,6 +21,35 @@ const BASE_LOAD_MW = 1000; // assume baseload of 1 GW for CF outputs
 const ALL_FUELS = ['coal', 'gas', 'oil'];
 const TX_WACC = 0.06;
 const TX_LIFE = 50;
+let lcoeDisplayMode = 'delta'; // 'delta' or 'transmission'
+
+// LCOE Display Mode Toggle (Delta vs Transmission Cost)
+const lcoeDisplayModeButtons = document.querySelectorAll('#lcoe-display-mode button');
+if (lcoeDisplayModeButtons && lcoeDisplayModeButtons.length > 0) {
+    lcoeDisplayModeButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const mode = btn.dataset.mode;
+            if (mode === lcoeDisplayMode) return;
+            lcoeDisplayMode = mode;
+
+            // Update button UI
+            lcoeDisplayModeButtons.forEach(b => {
+                const isActive = b.dataset.mode === mode;
+                b.classList.toggle('bg-gray-600', isActive);
+                b.classList.toggle('text-white', isActive);
+                b.classList.toggle('shadow-sm', isActive);
+                b.classList.toggle('text-gray-400', !isActive);
+                b.classList.toggle('hover:text-white', !isActive);
+            });
+
+            // Update legend title and scale
+            updateLcoeLegendForMode(mode);
+
+            // Trigger map update to re-render with new color scale
+            updateUI();
+        });
+    });
+}
 const TX_CRF = (() => {
     // capitalRecoveryFactor is hoisted, so safe to call later
     try {
@@ -42,7 +71,7 @@ let lcoeParams = {
 let lcoeUpdateTimeout = null;
 let lcoeReference = null; // Stores the selected location's LCOE result
 const DELTA_PERCENTILE = 0.95;
-let comparisonMetric = 'lcoe';
+// comparisonMetric removed - now using lcoeDisplayMode ('delta' or 'transmission')
 let legendLock = false;
 let lockedColorInfo = null;
 let lastColorInfo = null;
@@ -54,37 +83,40 @@ const VIEW_MODE_EXPLANATIONS = {
 };
 
 // DOM Elements
+// DOM Elements
 const solarSlider = document.getElementById('solar-slider');
 const battSlider = document.getElementById('batt-slider');
 const solarVal = document.getElementById('solar-val');
 const battVal = document.getElementById('batt-val');
 const loading = document.getElementById('loading');
 const loadingStatus = document.getElementById('loading-status');
-const viewModeSelect = document.getElementById('view-mode');
-const viewModeExplainer = document.getElementById('view-mode-explainer');
-const configNote = document.getElementById('config-note');
-const statsSection = document.getElementById('stats-section');
+const viewTabs = document.querySelectorAll('.view-tab'); // New: View Mode Tabs
+const primaryControls = document.getElementById('primary-controls'); // New: Primary Controls
 const sampleControls = document.getElementById('sample-controls');
-const locationPanel = document.getElementById('location-panel');
-const systemConfig = document.getElementById('system-config');
+const populationControls = document.getElementById('population-controls'); // New: Population Controls
 const legendCapacity = document.getElementById('legend-capacity');
-const legendSamples = document.getElementById('legend-samples');
+const legendSamples = document.getElementById('legend-samples'); // Note: Removed in HTML, need to check if logic uses it
 const legendLcoe = document.getElementById('legend-lcoe');
-const statsMetrics = document.getElementById('stats-metrics');
+const legendPopulation = document.getElementById('legend-population');
+
+// Stats
+const statAvgCf = document.getElementById('stat-avg-cf');
+const statMaxCf = document.getElementById('stat-max-cf');
+
+// LCOE Legend Elements
 const legendLcoeTitle = document.getElementById('legend-lcoe-title');
 const legendLcoeMin = document.getElementById('legend-lcoe-min');
 const legendLcoeMid = document.getElementById('legend-lcoe-mid');
 const legendLcoeMax = document.getElementById('legend-lcoe-max');
 const legendLcoeRef = document.getElementById('legend-lcoe-ref');
 const legendLcoeBar = document.getElementById('legend-lcoe-bar');
-const legendLcoeNoData = document.getElementById('legend-lcoe-no-data');
-const LCOE_NO_DATA_COLOR = '#611010';
-const legendTxExplainer = document.getElementById('legend-tx-explainer');
 const comparisonToggle = document.getElementById('comparison-toggle');
-const comparisonButtons = document.querySelectorAll('#comparison-toggle button');
 const clearRefBtn = document.getElementById('lcoe-clear-ref');
-const legendLockBtn = document.getElementById('legend-lock-btn');
-const lcoeControls = document.getElementById('lcoe-controls');
+const legendLcoeNoData = document.getElementById('legend-lcoe-nodata');
+const legendTxExplainer = document.getElementById('legend-tx-explainer');
+const LCOE_NO_DATA_COLOR = '#611010'; // Deep red for missing data
+
+// Settings Modal Elements
 const targetCfSlider = document.getElementById('target-cf-slider');
 const targetCfVal = document.getElementById('target-cf-val');
 const solarCapexInput = document.getElementById('solar-capex');
@@ -94,49 +126,67 @@ const batteryOpexInput = document.getElementById('battery-opex');
 const solarLifeInput = document.getElementById('solar-life');
 const batteryLifeInput = document.getElementById('battery-life');
 const waccInput = document.getElementById('wacc');
-const populationOverlayButtons = document.querySelectorAll('#population-overlay-mode button');
+
+// Population Elements
 const populationBaseButtons = document.querySelectorAll('#population-base-toggle button');
-const populationFuelButtons = document.querySelectorAll('#population-fuel-filter button');
-const populationFuelFilterWrapper = document.getElementById('population-fuel-filter');
-const populationToggleWrapper = document.getElementById('population-toggle');
-const populationOverlaySelectWrapper = document.getElementById('population-overlay-select-wrapper');
+const populationOverlayButtons = document.querySelectorAll('#population-overlay-mode button');
+const populationDisplayButtons = document.querySelectorAll('#population-display-toggle button');
+const legendPopMin = document.getElementById('legend-pop-min');
+const legendPopMax = document.getElementById('legend-pop-max');
+const populationFuelFilterWrapper = document.getElementById('population-fuel-filter'); // May not exist in new HTML
+const populationViewHelper = document.getElementById('population-view-helper');
+const populationChartsCta = document.getElementById('population-charts-cta');
+const populationFuelButtons = document.querySelectorAll('[data-fuel]');
+const populationChartMetricButtons = document.querySelectorAll('[data-metric]');
+const populationChartLayerButtons = document.querySelectorAll('[data-layer]');
+const populationChartOverlayButtons = document.querySelectorAll('[data-chart-overlay]');
+const comparisonButtons = document.querySelectorAll('[data-comparison-mode]');
+const legendLockBtn = document.getElementById('legend-lock-btn');
+const viewModeExplainer = document.getElementById('view-mode-explainer');
+const configNote = document.getElementById('config-note');
+const legendPopLayerNote = document.getElementById('legend-pop-layer-note');
 const populationOverlayConfig = document.getElementById('population-overlay-config');
+const populationLcoeWrapper = document.getElementById('population-lcoe-wrapper');
 const populationSolarSlider = document.getElementById('population-solar-slider');
 const populationSolarVal = document.getElementById('population-solar-val');
 const populationBattSlider = document.getElementById('population-batt-slider');
 const populationBattVal = document.getElementById('population-batt-val');
-const populationDisplayToggle = document.getElementById('population-display-toggle');
-const populationDisplayButtons = document.querySelectorAll('#population-display-toggle button');
-const legendPopulation = document.getElementById('legend-population');
-const legendPopMin = document.getElementById('legend-pop-min');
-const legendPopMax = document.getElementById('legend-pop-max');
-const legendPopLayerNote = document.getElementById('legend-pop-layer-note');
-const legendFossilPlants = document.getElementById('legend-fossil-plants');
-const populationLcoeWrapper = document.getElementById('population-lcoe-controls-wrapper');
-const populationOverlayHelper = document.getElementById('population-overlay-helper');
-const populationViewHelper = document.getElementById('population-view-helper');
-const populationChartsCta = document.getElementById('population-charts-cta');
-const mapContainer = document.getElementById('map');
-const populationChartsContainer = document.getElementById('population-charts');
-const populationChartHistogram = document.getElementById('population-chart-histogram');
-const populationChartLatMetric = document.getElementById('population-chart-lat-metric');
-const populationChartLatPop = document.getElementById('population-chart-lat-pop');
-const populationChartHistogramTitle = document.getElementById('population-chart-histogram-title');
-const populationChartHistogramLabel = document.getElementById('population-chart-histogram-label');
-const populationChartMetricLabel = document.getElementById('population-chart-metric-label');
-const populationChartLatMetricTitle = document.getElementById('population-chart-lat-metric-title');
-const populationChartLatPopLabel = document.getElementById('population-chart-lat-pop-label');
-const populationChartLatPopHelper = document.getElementById('population-chart-lat-pop-helper');
-const populationChartLayerButtons = document.querySelectorAll('#population-chart-layer-toggle button');
-const populationChartOverlayButtons = document.querySelectorAll('#population-chart-overlay-toggle button');
-const populationChartMetricButtons = document.querySelectorAll('#population-chart-metric-toggle button');
-const viewModeChartSelect = document.getElementById('view-mode-chart');
+const lcoeControls = document.getElementById('lcoe-controls');
+const locationPanel = document.getElementById('location-panel');
 const locCoordsEl = document.getElementById('loc-coords');
 const locValueEl = document.getElementById('loc-value');
 const locLabelEl = document.getElementById('loc-label');
 const locConfigEl = document.getElementById('loc-config');
 const locConfigTextEl = document.getElementById('loc-config-text');
 const locTxInfoEl = document.getElementById('loc-tx-info');
+
+// Charts
+const mapContainer = document.getElementById('map');
+const populationChartsContainer = document.getElementById('population-charts');
+const populationChartHistogram = document.getElementById('population-chart-histogram');
+const populationChartLatMetric = document.getElementById('population-chart-lat-metric');
+const populationChartLatPop = document.getElementById('population-chart-lat-pop');
+const closeChartsBtn = document.getElementById('close-charts'); // New
+const populationChartHistogramTitle = document.getElementById('population-chart-histogram-title');
+const populationChartHistogramLabel = document.getElementById('population-chart-histogram-label');
+const populationChartLatMetricTitle = document.getElementById('population-chart-lat-metric-title');
+const populationChartLatMetricLabel = document.getElementById('population-chart-lat-metric-label');
+const populationChartLatPopTitle = document.getElementById('population-chart-lat-pop-title');
+const populationChartLatPopLabel = document.getElementById('population-chart-lat-pop-label');
+const populationChartMetricLabel = document.getElementById('population-chart-metric-label');
+const populationChartLatPopHelper = document.getElementById('population-chart-lat-pop-helper');
+
+// Sample Chart
+const sampleChartOverlay = document.getElementById('sample-chart-overlay');
+const sampleChartCanvas = document.getElementById('sample-chart-canvas');
+const sampleChartClose = document.getElementById('sample-chart-close');
+const sampleChartLocation = document.getElementById('sample-chart-location');
+const sampleWeekSelect = document.getElementById('sample-week-select');
+const timeScrubber = document.getElementById('time-scrubber');
+const scrubberTime = document.getElementById('scrubber-time');
+const scrubberProgress = document.getElementById('scrubber-progress');
+const samplePlayBtn = document.getElementById('sample-play');
+const sampleResetBtn = document.getElementById('sample-reset');
 
 // Store original parent of LCOE controls for moving back and forth
 let lcoeControlsOriginalParent = null;
@@ -333,16 +383,35 @@ function setViewModeExplanation(mode) {
 }
 
 function updatePopulationOverlayControls(mode) {
-    if (!populationOverlayConfig) return;
+    const popCfControls = document.getElementById('population-cf-controls');
+    const popLcoeControls = document.getElementById('population-lcoe-controls');
 
-    // Show CF config controls (solar/batt sliders) when CF overlay selected
-    const showCfControls = mode === 'cf';
-    populationOverlayConfig.classList.toggle('hidden', !showCfControls);
-    if (showCfControls) {
-        if (populationSolarSlider) populationSolarSlider.value = currentSolar;
-        if (populationSolarVal) populationSolarVal.textContent = currentSolar;
-        if (populationBattSlider) populationBattSlider.value = currentBatt;
-        if (populationBattVal) populationBattVal.textContent = currentBatt;
+    // Show CF controls when CF overlay selected
+    if (mode === 'cf') {
+        if (popCfControls) popCfControls.classList.remove('hidden');
+        if (popLcoeControls) popLcoeControls.classList.add('hidden');
+    }
+    // Show LCOE controls when LCOE overlay selected
+    else if (mode === 'lcoe') {
+        if (popCfControls) popCfControls.classList.add('hidden');
+        if (popLcoeControls) popLcoeControls.classList.remove('hidden');
+    }
+    // Hide both when no overlay
+    else {
+        if (popCfControls) popCfControls.classList.add('hidden');
+        if (popLcoeControls) popLcoeControls.classList.add('hidden');
+    }
+
+    // Legacy: Handle old overlay config if it exists
+    if (populationOverlayConfig) {
+        const showCfControls = mode === 'cf';
+        populationOverlayConfig.classList.toggle('hidden', !showCfControls);
+        if (showCfControls) {
+            if (populationSolarSlider) populationSolarSlider.value = currentSolar;
+            if (populationSolarVal) populationSolarVal.textContent = currentSolar;
+            if (populationBattSlider) populationBattSlider.value = currentBatt;
+            if (populationBattVal) populationBattVal.textContent = currentBatt;
+        }
     }
 
     // Show LCOE controls when LCOE overlay selected in population mode
@@ -381,6 +450,8 @@ function showMapContainerOnly() {
     const wasHidden = mapContainer?.classList.contains('hidden');
     if (mapContainer) mapContainer.classList.remove('hidden');
     if (populationChartsContainer) populationChartsContainer.classList.add('hidden');
+    // Show legend when showing map
+    if (legendPopulation) legendPopulation.classList.remove('hidden');
     if (wasHidden) {
         // Give Leaflet a nudge to recalc sizes after being unhidden
         setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
@@ -390,6 +461,8 @@ function showMapContainerOnly() {
 function showPopulationChartsOnly() {
     if (mapContainer) mapContainer.classList.add('hidden');
     if (populationChartsContainer) populationChartsContainer.classList.remove('hidden');
+    // Hide legend when showing charts
+    if (legendPopulation) legendPopulation.classList.add('hidden');
 }
 
 function setLocationPanelChartSummary() {
@@ -419,9 +492,11 @@ function updatePopulationDisplayToggleUI() {
     if (!populationDisplayButtons || populationDisplayButtons.length === 0) return;
     populationDisplayButtons.forEach(btn => {
         const isActive = btn.dataset.mode === populationDisplayMode;
-        btn.classList.toggle('bg-slate-700', isActive);
-        btn.classList.toggle('text-slate-100', isActive);
-        btn.classList.toggle('text-slate-300', !isActive);
+        btn.classList.toggle('bg-gray-600', isActive);
+        btn.classList.toggle('text-white', isActive);
+        btn.classList.toggle('shadow-sm', isActive);
+        btn.classList.toggle('text-gray-400', !isActive);
+        btn.classList.toggle('hover:text-white', !isActive);
     });
 }
 
@@ -429,9 +504,11 @@ function updatePopulationOverlayToggleUI() {
     if (!populationOverlayButtons || populationOverlayButtons.length === 0) return;
     populationOverlayButtons.forEach(btn => {
         const isActive = btn.dataset.overlay === populationOverlayMode;
-        btn.classList.toggle('bg-slate-700', isActive);
-        btn.classList.toggle('text-slate-100', isActive);
-        btn.classList.toggle('text-slate-300', !isActive);
+        btn.classList.toggle('bg-gray-600', isActive);
+        btn.classList.toggle('text-white', isActive);
+        btn.classList.toggle('shadow-sm', isActive);
+        btn.classList.toggle('text-gray-400', !isActive);
+        btn.classList.toggle('hover:text-white', !isActive);
     });
 }
 
@@ -439,9 +516,11 @@ function updatePopulationBaseToggleUI() {
     if (!populationBaseButtons || populationBaseButtons.length === 0) return;
     populationBaseButtons.forEach(btn => {
         const isActive = btn.dataset.base === populationBaseLayer;
-        btn.classList.toggle('bg-slate-700', isActive);
-        btn.classList.toggle('text-slate-100', isActive);
-        btn.classList.toggle('text-slate-300', !isActive);
+        btn.classList.toggle('bg-gray-600', isActive);
+        btn.classList.toggle('text-white', isActive);
+        btn.classList.toggle('shadow-sm', isActive);
+        btn.classList.toggle('text-gray-400', !isActive);
+        btn.classList.toggle('hover:text-white', !isActive);
     });
     if (populationFuelFilterWrapper) {
         populationFuelFilterWrapper.classList.toggle('hidden', populationBaseLayer !== 'plants');
@@ -675,6 +754,12 @@ function renderLegendFromInfo(info) {
     }
 }
 
+function updateLcoeLegendForMode(mode) {
+    // Update legend when display mode changes
+    // This will be handled by the next updateModel() call
+    // which will call prepareLcoeDisplayData() -> updateLcoeLegend()
+}
+
 function updateLcoeLegend(points, overrideInfo = null) {
     if (overrideInfo) {
         renderLegendFromInfo(overrideInfo);
@@ -699,7 +784,7 @@ function updateLcoeLegend(points, overrideInfo = null) {
     }
 
     if (lcoeReference) {
-        if (comparisonMetric === 'tx') {
+        if (lcoeDisplayMode === 'transmission') {
             const txValues = points
                 .filter(p => p.meetsTarget && p.txMetrics && p.txMetrics.breakevenPerGwKm > 0)
                 .map(p => p.txMetrics.breakevenPerGwKm)
@@ -1254,19 +1339,185 @@ function renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels
     }
 }
 
+function prepareLcoeDisplayData() {
+    if (!summaryData.length || locationIndex.size === 0) return;
+    lcoeResults = computeBestLcoeByLocation(lcoeParams.targetCf, lcoeParams);
+
+    // Sync reference to freshest data
+    let ref = null;
+    if (lcoeReference) {
+        ref = lcoeResults.find(r => r.location_id === lcoeReference.location_id) || null;
+        lcoeReference = ref;
+    }
+
+    const wantsComparison = Boolean(ref);
+    const desiredType = wantsComparison ? (lcoeDisplayMode === 'transmission' ? 'tx' : 'delta') : 'lcoe';
+    if (!wantsComparison) {
+        legendLock = false;
+        lockedColorInfo = null;
+        updateLegendLockButton();
+    } else if (legendLock && lockedColorInfo && lockedColorInfo.type !== desiredType) {
+        // Display mode changed (delta <-> transmission), force recalculation
+        legendLock = false;
+        lockedColorInfo = null;
+        updateLegendLockButton();
+    }
+
+    const resultsWithDelta = lcoeResults.map(r => {
+        const delta = ref ? r.lcoe - ref.lcoe : null;
+        const txMetrics = ref ? computeTransmissionMetrics(r, ref, delta) : null;
+        return { ...r, delta, txMetrics };
+    });
+
+    let colorInfo;
+    if (legendLock && lockedColorInfo) {
+        colorInfo = updateLcoeLegend(resultsWithDelta, lockedColorInfo);
+    } else {
+        colorInfo = updateLcoeLegend(resultsWithDelta);
+        if (legendLock) {
+            lockedColorInfo = colorInfo;
+        }
+    }
+    lastColorInfo = colorInfo;
+
+    return { resultsWithDelta, ref, colorInfo };
+}
+
+function updateLcoeView() {
+    const prepared = prepareLcoeDisplayData();
+    if (!prepared) return;
+    const { resultsWithDelta, ref, colorInfo } = prepared;
+
+    updateLcoeMap(resultsWithDelta, {
+        targetCf: lcoeParams.targetCf,
+        colorInfo,
+        reference: ref
+    });
+}
+
+function updatePopulationView() {
+    const overlayMode = populationOverlayMode || 'none';
+
+    // Prepare data for overlay
+    let cfData = [];
+    let lcoeData = [];
+    let lcoeColorInfo = null;
+
+    if (overlayMode === 'cf') {
+        cfData = summaryData.filter(d => d.solar_gw === currentSolar && d.batt_gwh === currentBatt);
+    } else if (overlayMode === 'lcoe') {
+        const prepared = prepareLcoeDisplayData();
+        if (prepared) {
+            lcoeData = prepared.resultsWithDelta;
+            lcoeColorInfo = prepared.colorInfo;
+        }
+    }
+
+    // Display mode: map or charts
+    if (populationDisplayMode === 'charts') {
+        // Show charts
+        showPopulationChartsOnly();
+        setLocationPanelChartSummary();
+
+        // Build metrics for charts
+        let metrics = [];
+        if (populationBaseLayer === 'population') {
+            metrics = buildPopulationMetrics(populationData, overlayMode, cfData, lcoeData);
+        } else if (populationBaseLayer === 'plants') {
+            metrics = buildPlantMetrics(fossilCapacity, overlayMode, cfData, lcoeData, populationFuelFilter);
+        }
+
+        renderPopulationCharts(metrics, {
+            overlayMode,
+            baseLayer: populationBaseLayer,
+            selectedFuels: populationFuelFilter
+        });
+    } else {
+        // Show map
+        showMapContainerOnly();
+
+        updatePopulationSimple(populationData, {
+            baseLayer: populationBaseLayer,
+            overlayMode,
+            cfData,
+            lcoeData,
+            lcoeColorInfo,
+            targetCf: lcoeParams.targetCf,
+            fossilPlants,
+            fossilCapacityMap,
+            selectedFuels: Array.from(populationFuelFilter)
+        });
+
+        updatePopulationLegend(populationData, overlayMode);
+    }
+}
+
+function handleSolarInput(value, source) {
+    const val = parseInt(value, 10);
+    if (!Number.isFinite(val)) return;
+    currentSolar = val;
+    solarVal.textContent = val;
+    if (solarSlider) solarSlider.value = val;
+
+    // Auto-adjust battery: if solar > 10 GW and battery < 18 GWh, set battery to 18 GWh
+    if (val > 10 && currentBatt < 18) {
+        currentBatt = 18;
+        battVal.textContent = 18;
+        if (battSlider) battSlider.value = 18;
+        // Also update population panel battery slider if it exists
+        const popBattSlider = document.getElementById('pop-batt-slider');
+        const popBattVal = document.getElementById('pop-batt-val');
+        if (popBattSlider) popBattSlider.value = 18;
+        if (popBattVal) popBattVal.textContent = 18;
+    }
+
+    updateModel();
+}
+
+function handleBattInput(value, source) {
+    const val = parseInt(value, 10);
+    if (!Number.isFinite(val)) return;
+    currentBatt = val;
+    battVal.textContent = val;
+    if (battSlider) battSlider.value = val;
+    updateModel();
+}
+
+function refreshActiveLcoeView() {
+    if (currentViewMode === 'population' && populationOverlayMode === 'lcoe') {
+        updatePopulationView();
+    } else {
+        updateLcoeView();
+    }
+}
+
+async function handleLocationSelect(locationData) {
+    currentLocationId = locationData?.location_id ?? null;
+    const isPopulationLcoe = currentViewMode === 'population' && populationOverlayMode === 'lcoe';
+    if ((currentViewMode === 'lcoe' || isPopulationLcoe) && locationData) {
+        lcoeReference = locationData;
+        refreshActiveLcoeView();
+    }
+}
+
 async function init() {
     try {
         // Initialize Map
         await initMap(handleLocationSelect);
 
         // Initialize Hourly Profile Samples
-        initSampleDays();
+        initSampleDays(sampleWeekSelect);
 
         // Load Data
         loadingStatus.textContent = "Downloading summary data...";
         summaryData = await loadSummary();
+        console.log("summaryData loaded:", typeof summaryData, Array.isArray(summaryData), summaryData ? summaryData.length : 'null');
+        if (!Array.isArray(summaryData)) {
+            throw new Error("summaryData is not an array! It is: " + typeof summaryData);
+        }
         locationIndex = buildLocationIndex(summaryData);
         summaryCoordIndex = buildCoordIndex(summaryData);
+
         try {
             populationData = await loadPopulationCsv();
             populationCoordIndex = buildCoordIndex(populationData);
@@ -1298,7 +1549,13 @@ async function init() {
 
         loadingStatus.textContent = "Processing...";
         console.log("Loaded summary data. Rows:", summaryData.length);
-        updateUI();
+
+        // Initialize UI Events
+        initUIEvents();
+
+        // Initial View
+        updateViewMode('capacity');
+        updateModel();
 
         // Hide Loading
         loading.classList.add('hidden');
@@ -1310,536 +1567,282 @@ async function init() {
     }
 }
 
-function updateUI() {
-    if (currentViewMode === 'capacity') {
-        // Update Map with CF data
-        updateMap(summaryData, currentSolar, currentBatt);
-        legendPopulation?.classList.add('hidden');
-        legendFossilPlants?.classList.add('hidden');
-    } else if (currentViewMode === 'lcoe') {
-        updateLcoeView();
-        legendPopulation?.classList.add('hidden');
-        legendFossilPlants?.classList.add('hidden');
-    } else if (currentViewMode === 'population') {
-        updatePopulationView();
-        legendPopulation?.classList.remove('hidden');
-    } else {
-        // Sample mode
-        legendPopulation?.classList.add('hidden');
-        legendFossilPlants?.classList.add('hidden');
-    }
-}
-
-function prepareLcoeDisplayData() {
-    if (!summaryData.length || locationIndex.size === 0) return;
-    lcoeResults = computeBestLcoeByLocation(lcoeParams.targetCf, lcoeParams);
-
-    // Sync reference to freshest data
-    let ref = null;
-    if (lcoeReference) {
-        ref = lcoeResults.find(r => r.location_id === lcoeReference.location_id) || null;
-        lcoeReference = ref;
-    }
-
-    const wantsComparison = Boolean(ref);
-    const desiredType = wantsComparison ? (comparisonMetric === 'tx' ? 'tx' : 'delta') : 'lcoe';
-    if (!wantsComparison) {
-        legendLock = false;
-        lockedColorInfo = null;
-        updateLegendLockButton();
-    } else if (legendLock && lockedColorInfo && lockedColorInfo.type !== desiredType) {
-        lockedColorInfo = null;
-    }
-
-    const resultsWithDelta = lcoeResults.map(r => {
-        const delta = ref ? r.lcoe - ref.lcoe : null;
-        const txMetrics = ref ? computeTransmissionMetrics(r, ref, delta) : null;
-        return { ...r, delta, txMetrics };
+function initUIEvents() {
+    // View Mode Tabs
+    viewTabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            const mode = tab.dataset.mode;
+            updateViewMode(mode);
+        });
     });
 
-    let colorInfo;
-    if (legendLock && lockedColorInfo) {
-        colorInfo = updateLcoeLegend(resultsWithDelta, lockedColorInfo);
-    } else {
-        colorInfo = updateLcoeLegend(resultsWithDelta);
-        if (legendLock) {
-            lockedColorInfo = colorInfo;
-        }
-    }
-    lastColorInfo = colorInfo;
+    // Sliders
+    solarSlider.addEventListener('input', (e) => handleSolarInput(e.target.value, 'main'));
+    battSlider.addEventListener('input', (e) => handleBattInput(e.target.value, 'main'));
 
-    return { resultsWithDelta, ref, colorInfo };
-}
-
-function updateLcoeView() {
-    const prepared = prepareLcoeDisplayData();
-    if (!prepared) return;
-    const { resultsWithDelta, ref, colorInfo } = prepared;
-
-    updateLcoeMap(resultsWithDelta, {
-        targetCf: lcoeParams.targetCf,
-        colorInfo,
-        reference: ref,
-        comparisonMetric
+    // Sample Controls
+    sampleWeekSelect.addEventListener('change', (e) => {
+        const weekId = parseInt(e.target.value, 10);
+        loadSampleWeekData(weekId).then(() => {
+            updateSampleView();
+        });
     });
-}
 
-function refreshActiveLcoeView() {
-    if (currentViewMode === 'population' && populationOverlayMode === 'lcoe') {
-        updatePopulationView();
-    } else {
-        updateLcoeView();
+    timeScrubber.addEventListener('input', (e) => {
+        const hour = parseInt(e.target.value, 10);
+        updateSampleTime(hour);
+    });
+
+    samplePlayBtn.addEventListener('click', toggleSamplePlay);
+    sampleResetBtn.addEventListener('click', resetSamplePlay);
+    sampleChartClose.addEventListener('click', () => {
+        sampleChartOverlay.classList.add('hidden');
+    });
+
+    // Population Controls
+    populationBaseButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            setPopulationBaseLayer(btn.dataset.base);
+        });
+    });
+
+    populationOverlayButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const mode = btn.dataset.overlay || 'none';
+            if (mode === populationOverlayMode) return;
+            populationOverlayMode = mode;
+            updatePopulationOverlayToggleUI();
+            updatePopulationOverlayControls(mode);
+            if (currentViewMode === 'population') {
+                updatePopulationView();
+            }
+        });
+    });
+
+    // Population CF overlay sliders (sync with main values)
+    const popSolarSlider = document.getElementById('pop-solar-slider');
+    const popSolarVal = document.getElementById('pop-solar-val');
+    const popBattSlider = document.getElementById('pop-batt-slider');
+    const popBattVal = document.getElementById('pop-batt-val');
+
+    if (popSolarSlider) {
+        popSolarSlider.addEventListener('input', (e) => {
+            const val = parseInt(e.target.value, 10);
+            if (popSolarVal) popSolarVal.textContent = val;
+            handleSolarInput(val);
+        });
+    }
+
+    if (popBattSlider) {
+        popBattSlider.addEventListener('input', (e) => {
+            const val = parseInt(e.target.value, 10);
+            if (popBattVal) popBattVal.textContent = val;
+            handleBattInput(val);
+        });
+    }
+
+    // Population LCOE slider
+    const popTargetCfSlider = document.getElementById('pop-target-cf-slider');
+    const popTargetCfVal = document.getElementById('pop-target-cf-val');
+
+    if (popTargetCfSlider) {
+        popTargetCfSlider.addEventListener('input', (e) => {
+            const val = parseInt(e.target.value, 10);
+            if (popTargetCfVal) popTargetCfVal.textContent = val;
+            lcoeParams.targetCf = val / 100;
+            queueLcoeUpdate();
+        });
+    }
+
+    populationDisplayButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            setPopulationDisplayMode(btn.dataset.mode);
+        });
+    });
+
+    if (closeChartsBtn) {
+        closeChartsBtn.addEventListener('click', () => {
+            setPopulationDisplayMode('map');
+        });
+    }
+
+    // Settings Modal Inputs
+    targetCfSlider.addEventListener('input', (e) => {
+        const pct = Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0));
+        lcoeParams.targetCf = pct / 100;
+        targetCfVal.textContent = pct;
+        queueLcoeUpdate();
+    });
+
+    [solarCapexInput, batteryCapexInput, solarOpexInput, batteryOpexInput, solarLifeInput, batteryLifeInput, waccInput].forEach(input => {
+        input.addEventListener('change', updateLcoeParams);
+    });
+
+    // LCOE Legend Actions
+    if (clearRefBtn) {
+        clearRefBtn.addEventListener('click', () => {
+            lcoeReference = null;
+            lcoeDisplayMode = 'delta'; // Reset to delta mode when clearing reference
+            updateModel();
+        });
     }
 }
 
-async function handleLocationSelect(locationData) {
-    currentLocationId = locationData?.location_id ?? null;
-    const isPopulationLcoe = currentViewMode === 'population' && populationOverlayMode === 'lcoe';
-    if ((currentViewMode === 'lcoe' || isPopulationLcoe) && locationData) {
-        lcoeReference = locationData;
-        refreshActiveLcoeView();
-    }
-}
-
-function switchViewMode(mode) {
-    setViewModeExplanation(mode);
+function updateViewMode(mode) {
     currentViewMode = mode;
 
-    // Sync chart view mode dropdown with main selector
-    if (viewModeChartSelect && viewModeChartSelect.value !== mode) {
-        viewModeChartSelect.value = mode;
+    // Update Tabs UI
+    viewTabs.forEach(tab => {
+        const isActive = tab.dataset.mode === mode;
+        if (isActive) {
+            tab.classList.remove('text-gray-400', 'hover:text-white', 'hover:bg-white/5');
+            tab.classList.add('bg-primary', 'text-black');
+        } else {
+            tab.classList.add('text-gray-400', 'hover:text-white', 'hover:bg-white/5');
+            tab.classList.remove('bg-primary', 'text-black');
+        }
+    });
+
+    // Reset state
+    cleanupSampleDays();
+    if (mode !== 'population') {
+        populationChartsContainer.classList.add('hidden');
+        mapContainer.classList.remove('hidden');
     }
 
-    cleanupSampleDays();
-    if (mode !== 'population' && locationPanelShowingChartSummary) {
-        resetLocationPanelAfterChartSummary();
+    // Toggle Panels
+    const systemConfig = document.getElementById('primary-controls');
+    const lcoeControls = document.getElementById('lcoe-controls');
+
+    if (mode === 'lcoe') {
+        // LCOE mode: Hide system config, show LCOE controls
+        if (systemConfig) systemConfig.classList.add('hidden');
+        if (lcoeControls) lcoeControls.classList.remove('hidden');
+        sampleControls.classList.add('hidden');
+        populationControls.classList.add('hidden');
+    } else if (mode === 'samples') {
+        // Samples mode: Show system config + sample controls
+        if (systemConfig) systemConfig.classList.remove('hidden');
+        if (lcoeControls) lcoeControls.classList.add('hidden');
+        sampleControls.classList.remove('hidden');
+        populationControls.classList.add('hidden');
+    } else if (mode === 'population') {
+        // Population mode: Hide system config, show population controls
+        if (systemConfig) systemConfig.classList.add('hidden');
+        if (lcoeControls) lcoeControls.classList.add('hidden');
+        sampleControls.classList.add('hidden');
+        populationControls.classList.remove('hidden');
+    } else {
+        // Capacity mode: Show system config only
+        if (systemConfig) systemConfig.classList.remove('hidden');
+        if (lcoeControls) lcoeControls.classList.add('hidden');
+        sampleControls.classList.add('hidden');
+        populationControls.classList.add('hidden');
     }
+
+    // Toggle Legends & Map Content
+    legendCapacity.classList.add('hidden');
+    legendLcoe.classList.add('hidden');
+    legendPopulation.classList.add('hidden');
 
     if (mode === 'capacity') {
-        // Show capacity elements
-        statsSection.classList.remove('hidden');
-        statsMetrics?.classList.remove('hidden');
-        locationPanel?.classList.remove('hidden');
-        showMapContainerOnly();
-        legendPopulation?.classList.add('hidden');
-        systemConfig?.classList.remove('hidden');
-        setConfigNoteVisibility(true);
-        populationToggleWrapper?.classList.add('hidden');
-        sampleControls.classList.add('hidden');
-        lcoeControls.classList.add('hidden');
         legendCapacity.classList.remove('hidden');
-        legendSamples.classList.add('hidden');
-        legendLcoe.classList.add('hidden');
-        if (comparisonToggle) comparisonToggle.classList.add('hidden');
-        clearRefBtn.classList.add('hidden');
-        legendLock = false;
-        lockedColorInfo = null;
-        updateLegendLockButton();
-
-        // Update map with CF data
         updateMap(summaryData, currentSolar, currentBatt);
-    } else if (mode === 'samples') {
-        // Show sample elements
-        statsSection.classList.add('hidden');
-        locationPanel?.classList.add('hidden');
-        showMapContainerOnly();
-        legendPopulation?.classList.add('hidden');
-        systemConfig?.classList.remove('hidden');
-        setConfigNoteVisibility(true);
-        populationToggleWrapper?.classList.add('hidden');
-        sampleControls.classList.remove('hidden');
-        lcoeControls.classList.add('hidden');
-        legendCapacity.classList.add('hidden');
-        legendSamples.classList.remove('hidden');
-        legendLcoe.classList.add('hidden');
-        populationToggleWrapper?.classList.add('hidden');
-        if (comparisonToggle) comparisonToggle.classList.add('hidden');
-        clearRefBtn.classList.add('hidden');
-        legendLock = false;
-        lockedColorInfo = null;
-        updateLegendLockButton();
-
-        // Load sample week data
-        loadSampleWeekData(currentSolar, currentBatt, summaryData);
     } else if (mode === 'lcoe') {
-        statsSection.classList.add('hidden');
-        locationPanel?.classList.remove('hidden');
-        sampleControls.classList.add('hidden');
-        moveLcoeControlsToOriginalPosition(); // Move LCOE controls back to original position
-        lcoeControls.classList.remove('hidden');
-        showMapContainerOnly();
-        legendPopulation?.classList.add('hidden');
-        systemConfig?.classList.add('hidden');
-        setConfigNoteVisibility(false);
-        legendCapacity.classList.add('hidden');
-        legendSamples.classList.add('hidden');
         legendLcoe.classList.remove('hidden');
-        populationToggleWrapper?.classList.add('hidden');
-
         updateLcoeView();
     } else if (mode === 'population') {
-        statsSection.classList.remove('hidden');
-        statsMetrics?.classList.add('hidden');
-        locationPanel?.classList.remove('hidden');
-        sampleControls.classList.add('hidden');
-        lcoeControls.classList.add('hidden');
-        systemConfig?.classList.add('hidden');
-        setConfigNoteVisibility(false);
+        legendPopulation.classList.remove('hidden');
+        updatePopulationView();
+    } else if (mode === 'samples') {
+        legendCapacity.classList.remove('hidden'); // Keep capacity legend for context? Or maybe hide it.
+        // Let's hide it for cleaner look as per "Google-like" request
         legendCapacity.classList.add('hidden');
-        legendSamples.classList.add('hidden');
-        legendLcoe.classList.add('hidden');
-        populationToggleWrapper?.classList.remove('hidden');
-        updatePopulationView();
-    }
-}
-
-setViewModeExplanation(currentViewMode);
-setConfigNoteVisibility(currentViewMode !== 'lcoe');
-if (currentViewMode === 'population') {
-    populationToggleWrapper?.classList.remove('hidden');
-}
-legendPopulation?.classList.add('hidden');
-if (populationSolarSlider) {
-    populationSolarSlider.value = currentSolar;
-    if (populationSolarVal) populationSolarVal.textContent = currentSolar;
-}
-if (populationBattSlider) {
-    populationBattSlider.value = currentBatt;
-    if (populationBattVal) populationBattVal.textContent = currentBatt;
-}
-updatePopulationDisplayToggleUI();
-updatePopulationOverlayToggleUI();
-updatePopulationBaseToggleUI();
-updatePopulationFuelToggleUI();
-updateChartMetricToggleUI();
-updatePopulationViewHelperCopy();
-
-// Event Listeners
-function handleSolarInput(value, origin = 'main') {
-    const parsed = parseInt(value, 10);
-    if (!Number.isFinite(parsed)) return;
-    const clamped = Math.max(1, Math.min(20, parsed));
-    currentSolar = clamped;
-    if (solarVal) solarVal.textContent = clamped;
-    if (populationSolarVal) populationSolarVal.textContent = clamped;
-    if (solarSlider && origin !== 'main') solarSlider.value = clamped;
-    if (populationSolarSlider && origin !== 'population') populationSolarSlider.value = clamped;
-    if (currentSolar >= 11 && currentBatt < 18) {
-        handleBattInput(18, 'auto');
-    }
-    if (currentViewMode === 'capacity') {
-        updateUI();
-    } else if (currentViewMode === 'samples') {
+        // Actually, samples view usually shows a selected point on top of the map.
+        // We should probably keep the map visible.
+        updateMap(summaryData, currentSolar, currentBatt);
         loadSampleWeekData(currentSolar, currentBatt, summaryData);
+    }
+}
+
+function updateUI() {
+    // Update stats
+    const filtered = summaryData.filter(d => d.solar_gw === currentSolar && d.batt_gwh === currentBatt);
+    if (filtered.length > 0) {
+        const avgCf = filtered.reduce((sum, d) => sum + d.annual_cf, 0) / filtered.length;
+        const maxCf = Math.max(...filtered.map(d => d.annual_cf));
+        if (statAvgCf) statAvgCf.textContent = `${(avgCf * 100).toFixed(1)}%`;
+        if (statMaxCf) statMaxCf.textContent = `${(maxCf * 100).toFixed(1)}%`;
+    } else {
+        if (statAvgCf) statAvgCf.textContent = '--%';
+        if (statMaxCf) statMaxCf.textContent = '--%';
+    }
+
+    // Update map
+    if (currentViewMode === 'capacity') {
+        updateMap(summaryData, currentSolar, currentBatt);
+    } else if (currentViewMode === 'lcoe') {
+        queueLcoeUpdate();
     } else if (currentViewMode === 'population') {
         updatePopulationView();
     }
 }
 
-function handleBattInput(value, origin = 'main') {
-    const parsed = parseInt(value, 10);
-    if (!Number.isFinite(parsed)) return;
-    let clamped = Math.max(0, Math.min(36, parsed));
-    if (currentSolar >= 11) {
-        clamped = Math.max(18, clamped);
-    }
-    currentBatt = clamped;
-    if (battVal) battVal.textContent = clamped;
-    if (populationBattVal) populationBattVal.textContent = clamped;
-    if (battSlider) battSlider.value = clamped;
-    if (populationBattSlider) populationBattSlider.value = clamped;
-    if (currentViewMode === 'capacity') {
-        updateUI();
-    } else if (currentViewMode === 'samples') {
-        loadSampleWeekData(currentSolar, currentBatt, summaryData);
-    } else if (currentViewMode === 'population') {
-        updatePopulationView();
-    }
-}
-
-solarSlider.addEventListener('input', (e) => handleSolarInput(e.target.value, 'main'));
-
-battSlider.addEventListener('input', (e) => handleBattInput(e.target.value, 'main'));
-
-populationSolarSlider?.addEventListener('input', (e) => handleSolarInput(e.target.value, 'population'));
-
-populationBattSlider?.addEventListener('input', (e) => handleBattInput(e.target.value, 'population'));
-
-viewModeSelect.addEventListener('change', (e) => {
-    switchViewMode(e.target.value);
-});
-
-targetCfSlider.addEventListener('input', (e) => {
-    const pct = Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0));
-    lcoeParams.targetCf = pct / 100;
-    targetCfVal.textContent = pct;
+function updateLcoeParams() {
+    lcoeParams.solarCapex = parseFloat(solarCapexInput.value) || 0;
+    lcoeParams.batteryCapex = parseFloat(batteryCapexInput.value) || 0;
+    lcoeParams.solarOpexPct = (parseFloat(solarOpexInput.value) || 0) / 100;
+    lcoeParams.batteryOpexPct = (parseFloat(batteryOpexInput.value) || 0) / 100;
+    lcoeParams.solarLife = parseInt(solarLifeInput.value, 10) || 1;
+    lcoeParams.batteryLife = parseInt(batteryLifeInput.value, 10) || 1;
+    lcoeParams.wacc = (parseFloat(waccInput.value) || 0) / 100;
     queueLcoeUpdate();
-});
+}
 
-function updatePopulationView() {
-    if (!populationData.length) return;
-    const isChartMode = populationDisplayMode === 'charts';
-    const baseLayer = populationBaseLayer;
-    const overlayMode = populationOverlayMode;
-    const selectedFuelsArr = Array.from(populationFuelFilter);
-    const selectedFuelSet = selectedFuelsArr.length ? new Set(selectedFuelsArr) : new Set(ALL_FUELS);
-    updatePopulationOverlayControls(overlayMode);
-
-    // Combine population with coordinates from summary
-    const enriched = populationData.map(p => {
-        const coords = summaryCoordIndex.get(coordKey(p.latitude, p.longitude)) || populationCoordIndex.get(coordKey(p.latitude, p.longitude)) || {};
-        const lat = Number.isFinite(coords.latitude) ? coords.latitude : p.latitude;
-        const lon = Number.isFinite(coords.longitude) ? coords.longitude : p.longitude;
-        const locId = Number.isFinite(coords.location_id) ? Number(coords.location_id) : (Number.isFinite(p.location_id) ? Number(p.location_id) : null);
-        return {
-            ...p,
-            latitude: lat,
-            longitude: lon,
-            annual_cf: coords.annual_cf,
-            location_id: locId
-        };
-    }).filter(p => Number.isFinite(p.latitude) && Number.isFinite(p.longitude));
-
-    // Use current solar/batt selection to fetch CF overlay
-    const cfFiltered = summaryData.filter(d => d.solar_gw === currentSolar && d.batt_gwh === currentBatt);
-    let lcoeDisplay = null;
-    if (overlayMode === 'lcoe') {
-        // Reuse the exact LCOE selection + legend logic from the LCOE view
-        lcoeDisplay = prepareLcoeDisplayData();
-        legendLcoe.classList.remove('hidden');
-        legendCapacity.classList.add('hidden');
-    } else if (overlayMode === 'cf') {
-        legendCapacity.classList.remove('hidden');
-        legendLcoe.classList.add('hidden');
-    } else {
-        legendCapacity.classList.add('hidden');
-        legendLcoe.classList.add('hidden');
-    }
-    if (baseLayer === 'population') {
-        updatePopulationLegend(enriched, overlayMode);
-    } else {
-        legendPopulation?.classList.add('hidden');
-    }
-    if (isChartMode) {
-        legendFossilPlants?.classList.add('hidden');
-        setLocationPanelChartSummary();
-        legendPopulation?.classList.add('hidden');
-        legendCapacity?.classList.add('hidden');
-        legendLcoe?.classList.add('hidden');
-        showPopulationChartsOnly();
-        const lcoeSource = overlayMode === 'lcoe' && lcoeDisplay ? lcoeDisplay.resultsWithDelta : lcoeResults;
-        const metrics = baseLayer === 'plants'
-            ? buildPlantMetrics(fossilCapacity, overlayMode, cfFiltered, lcoeSource, selectedFuelSet)
-            : buildPopulationMetrics(enriched, overlayMode, cfFiltered, lcoeSource);
-        renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels: selectedFuelSet });
-    } else {
-        resetLocationPanelAfterChartSummary();
-        if (baseLayer === 'population') {
-            legendPopulation?.classList.remove('hidden');
-            legendFossilPlants?.classList.add('hidden');
-        } else {
-            legendPopulation?.classList.add('hidden');
-            legendFossilPlants?.classList.remove('hidden');
-        }
-        showMapContainerOnly();
-        const filteredPlants = baseLayer === 'plants'
-            ? fossilPlants.filter(p => selectedFuelSet.has(p.fuel_group))
-            : [];
-        updatePopulationSimple(enriched, {
-            baseLayer,
-            selectedFuels: Array.from(selectedFuelSet),
-            overlayMode,
-            cfData: overlayMode === 'cf' ? cfFiltered : [],
-            lcoeData: overlayMode === 'lcoe' && lcoeDisplay ? lcoeDisplay.resultsWithDelta : [],
-            lcoeColorInfo: overlayMode === 'lcoe' ? lcoeDisplay?.colorInfo : null,
-            targetCf: lcoeParams.targetCf,
-            comparisonMetric,
-            fossilPlants: filteredPlants,
-            fossilCapacityMap: baseLayer === 'plants' ? fossilCapacityMap : null
-        });
-        if (baseLayer !== 'plants') {
-            legendFossilPlants?.classList.add('hidden');
-        }
+function updateSampleView() {
+    // Re-render sample chart if visible
+    if (currentViewMode === 'samples') {
+        loadSampleWeekData(currentSolar, currentBatt, summaryData);
     }
 }
 
-populationOverlayButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-        const mode = btn.dataset.overlay || 'none';
-        if (mode === populationOverlayMode) return;
-        populationOverlayMode = mode;
-        updatePopulationOverlayToggleUI();
-        updateChartOverlayToggleUI();
-        updatePopulationOverlayControls(mode);
-        if (mode === 'cf' || mode === 'lcoe') {
-            populationChartMetric = mode;
-            updateChartMetricToggleUI();
-        }
-        if (currentViewMode === 'population') {
-            updatePopulationView();
-        }
-    });
-});
+function updateSampleTime(hour) {
+    if (scrubberTime) scrubberTime.textContent = `Hour ${hour}`;
+    if (scrubberProgress) scrubberProgress.textContent = `Hour ${hour} / 168`;
+    // Update map/chart for specific hour if needed
+    // For now, just update the scrubber UI
+}
 
-populationBaseButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-        const mode = btn.dataset.base || 'population';
-        if (mode === populationBaseLayer) return;
-        setPopulationBaseLayer(mode);
-    });
-});
-
-populationFuelButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-        const fuel = btn.dataset.fuel;
-        if (!fuel) return;
-        togglePopulationFuel(fuel);
-    });
-});
-
-populationDisplayButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-        setPopulationDisplayMode(btn.dataset.mode);
-    });
-});
-
-populationChartMetricButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-        setPopulationChartMetric(btn.dataset.metric);
-    });
-});
-
-populationChartLayerButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-        setPopulationBaseLayer(btn.dataset.layer);
-    });
-});
-
-populationChartOverlayButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-        const mode = btn.dataset.overlay || 'none';
-        if (mode === populationOverlayMode) return;
-        populationOverlayMode = mode;
-        updatePopulationOverlayToggleUI();
-        updateChartOverlayToggleUI();
-        updatePopulationOverlayControls(mode);
-        if (mode === 'cf' || mode === 'lcoe') {
-            populationChartMetric = mode;
-            updateChartMetricToggleUI();
-        }
-        if (currentViewMode === 'population') {
-            updatePopulationView();
-        }
-    });
-});
-
-viewModeChartSelect?.addEventListener('change', (e) => {
-    const mode = e.target.value;
-    if (mode && mode !== currentViewMode) {
-        switchViewMode(mode);
-    }
-});
-
-populationChartsCta?.addEventListener('click', () => {
-    const nextMode = populationDisplayMode === 'charts' ? 'map' : 'charts';
-    setPopulationDisplayMode(nextMode);
-});
-
-solarCapexInput.addEventListener('change', (e) => {
-    const val = parseFloat(e.target.value);
-    if (Number.isFinite(val)) {
-        lcoeParams.solarCapex = Math.max(0, val);
-        queueLcoeUpdate();
-    }
-});
-
-batteryCapexInput.addEventListener('change', (e) => {
-    const val = parseFloat(e.target.value);
-    if (Number.isFinite(val)) {
-        lcoeParams.batteryCapex = Math.max(0, val);
-        queueLcoeUpdate();
-    }
-});
-
-solarOpexInput.addEventListener('change', (e) => {
-    const val = parseFloat(e.target.value);
-    if (Number.isFinite(val)) {
-        lcoeParams.solarOpexPct = Math.max(0, val) / 100;
-        queueLcoeUpdate();
-    }
-});
-
-batteryOpexInput.addEventListener('change', (e) => {
-    const val = parseFloat(e.target.value);
-    if (Number.isFinite(val)) {
-        lcoeParams.batteryOpexPct = Math.max(0, val) / 100;
-        queueLcoeUpdate();
-    }
-});
-
-solarLifeInput.addEventListener('change', (e) => {
-    const val = parseInt(e.target.value, 10);
-    if (Number.isFinite(val)) {
-        lcoeParams.solarLife = Math.max(1, val);
-        queueLcoeUpdate();
-    }
-});
-
-batteryLifeInput.addEventListener('change', (e) => {
-    const val = parseInt(e.target.value, 10);
-    if (Number.isFinite(val)) {
-        lcoeParams.batteryLife = Math.max(1, val);
-        queueLcoeUpdate();
-    }
-});
-
-waccInput.addEventListener('change', (e) => {
-    const val = parseFloat(e.target.value);
-    if (Number.isFinite(val)) {
-        lcoeParams.wacc = Math.max(0, val) / 100;
-        queueLcoeUpdate();
-    }
-});
-
-comparisonButtons.forEach(btn => {
-    btn.addEventListener('click', () => {
-        if (!lcoeReference) return;
-        const mode = btn.dataset.mode;
-        comparisonMetric = mode === 'tx' ? 'tx' : 'lcoe';
-        updateComparisonToggleUI();
-        refreshActiveLcoeView();
-    });
-});
-
-clearRefBtn.addEventListener('click', () => {
-    lcoeReference = null;
-    comparisonMetric = 'lcoe';
-    if (comparisonToggle) comparisonToggle.classList.add('hidden');
-    clearRefBtn.classList.add('hidden');
-    legendLock = false;
-    lockedColorInfo = null;
-    updateLegendLockButton();
-    updateComparisonToggleUI();
-    refreshActiveLcoeView();
-});
-
-legendLockBtn?.addEventListener('click', () => {
-    if (!lcoeReference) return;
-    legendLock = !legendLock;
-    if (!legendLock) {
-        lockedColorInfo = null;
-        updateLegendLockButton();
-        refreshActiveLcoeView();
+let samplePlayInterval = null;
+function toggleSamplePlay() {
+    if (samplePlayInterval) {
+        clearInterval(samplePlayInterval);
+        samplePlayInterval = null;
+        samplePlayBtn.textContent = 'Play';
     } else {
-        lockedColorInfo = lastColorInfo;
-        updateLegendLockButton();
-        if (!lockedColorInfo) {
-            refreshActiveLcoeView();
-        } else {
-            updateLcoeLegend(lcoeResults, lockedColorInfo);
-        }
+        samplePlayBtn.textContent = 'Pause';
+        samplePlayInterval = setInterval(() => {
+            let val = parseInt(timeScrubber.value, 10);
+            val = (val + 1) % 168;
+            timeScrubber.value = val;
+            updateSampleTime(val);
+        }, 100);
     }
-});
+}
+
+function resetSamplePlay() {
+    if (samplePlayInterval) {
+        clearInterval(samplePlayInterval);
+        samplePlayInterval = null;
+        samplePlayBtn.textContent = 'Play';
+    }
+    timeScrubber.value = 0;
+    updateSampleTime(0);
+}
+
+function updateModel() {
+    updateUI();
+}
 
 // Start
 init();

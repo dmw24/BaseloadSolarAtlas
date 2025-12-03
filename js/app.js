@@ -22,6 +22,7 @@ const ALL_FUELS = ['coal', 'gas', 'oil'];
 const TX_WACC = 0.06;
 const TX_LIFE = 50;
 let lcoeDisplayMode = 'delta'; // 'delta' or 'transmission'
+let populationChartCumulative = false;
 
 // LCOE Display Mode Toggle (Delta vs Transmission Cost)
 const lcoeDisplayModeButtons = document.querySelectorAll('#lcoe-display-mode button');
@@ -524,6 +525,21 @@ function updatePopulationBaseToggleUI() {
     });
     if (populationFuelFilterWrapper) {
         populationFuelFilterWrapper.classList.toggle('hidden', populationBaseLayer !== 'plants');
+    }
+
+    // Update chart titles based on base layer
+    const titlePercentile = document.getElementById('chart-title-percentile');
+    const titleLatitude = document.getElementById('chart-title-latitude');
+    const titleDistribution = document.getElementById('chart-title-distribution');
+
+    if (populationBaseLayer === 'plants') {
+        if (titlePercentile) titlePercentile.textContent = 'Metric by Fossil Capacity Percentile';
+        if (titleLatitude) titleLatitude.textContent = 'Metric by Latitude';
+        if (titleDistribution) titleDistribution.textContent = 'Fossil Capacity Distribution';
+    } else {
+        if (titlePercentile) titlePercentile.textContent = 'Metric by Population Percentile';
+        if (titleLatitude) titleLatitude.textContent = 'Metric by Latitude';
+        if (titleDistribution) titleDistribution.textContent = 'Population Distribution';
     }
 }
 
@@ -1212,14 +1228,29 @@ function renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels
         populationCharts.metric = metricLabel;
     }
 
+    // Prepare Histogram Data
+    // const histogram = buildWeightedHistogram(metrics, metricLabel); // Already declared above
+    let chartData = histogram.data;
+    let chartLabel = yAxisLabel;
+
+    // Apply Cumulative Logic if enabled
+    if (populationChartCumulative) {
+        let runningSum = 0;
+        chartData = histogram.data.map(val => {
+            runningSum += val;
+            return runningSum;
+        });
+        chartLabel = `Cumulative ${yAxisLabel}`;
+    }
+
     if (!populationCharts.histogram) {
         populationCharts.histogram = new ChartJS(populationChartHistogram.getContext('2d'), {
             type: 'bar',
             data: {
                 labels: histogram.labels,
                 datasets: [{
-                    label: yAxisLabel,
-                    data: histogram.data,
+                    label: chartLabel,
+                    data: chartData,
                     backgroundColor: 'rgba(56, 189, 248, 0.45)',
                     borderColor: 'rgba(56, 189, 248, 1)',
                     borderWidth: 1
@@ -1244,8 +1275,8 @@ function renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels
         });
     } else {
         populationCharts.histogram.data.labels = histogram.labels;
-        populationCharts.histogram.data.datasets[0].label = yAxisLabel;
-        populationCharts.histogram.data.datasets[0].data = histogram.data;
+        populationCharts.histogram.data.datasets[0].label = chartLabel;
+        populationCharts.histogram.data.datasets[0].data = chartData;
         populationCharts.histogram.options.scales.x.title.text = xAxisLabel;
         populationCharts.histogram.options.scales.y.title.text = yAxisLabel;
         populationCharts.histogram.options.plugins.tooltip.callbacks.label = histogramTooltip;
@@ -1619,6 +1650,21 @@ function initUIEvents() {
         });
     });
 
+    // Cumulative Toggle
+    const cumulativeToggle = document.getElementById('chart-cumulative-toggle');
+    if (cumulativeToggle) {
+        cumulativeToggle.addEventListener('click', () => {
+            populationChartCumulative = !populationChartCumulative;
+            cumulativeToggle.textContent = `Cumulative: ${populationChartCumulative ? 'ON' : 'OFF'}`;
+            cumulativeToggle.classList.toggle('text-emerald-400', populationChartCumulative);
+            cumulativeToggle.classList.toggle('bg-emerald-400/10', populationChartCumulative);
+            cumulativeToggle.classList.toggle('border-emerald-400/20', populationChartCumulative);
+
+            // Re-render chart
+            updatePopulationView();
+        });
+    }
+
     // Population CF overlay sliders (sync with main values)
     const popSolarSlider = document.getElementById('pop-solar-slider');
     const popSolarVal = document.getElementById('pop-solar-val');
@@ -1742,26 +1788,25 @@ function updateViewMode(mode) {
 
     // Toggle Legends & Map Content
     legendCapacity.classList.add('hidden');
+    legendSamples.classList.add('hidden');
     legendLcoe.classList.add('hidden');
     legendPopulation.classList.add('hidden');
 
     if (mode === 'capacity') {
         legendCapacity.classList.remove('hidden');
         updateMap(summaryData, currentSolar, currentBatt);
+    } else if (mode === 'samples') {
+        legendSamples.classList.remove('hidden');
+        // Map update handled by sample playback
+        updateMap(summaryData, currentSolar, currentBatt); // Ensure map is visible
+        loadSampleWeekData(currentSolar, currentBatt, summaryData);
     } else if (mode === 'lcoe') {
         legendLcoe.classList.remove('hidden');
         updateLcoeView();
     } else if (mode === 'population') {
         legendPopulation.classList.remove('hidden');
         updatePopulationView();
-    } else if (mode === 'samples') {
-        legendCapacity.classList.remove('hidden'); // Keep capacity legend for context? Or maybe hide it.
-        // Let's hide it for cleaner look as per "Google-like" request
         legendCapacity.classList.add('hidden');
-        // Actually, samples view usually shows a selected point on top of the map.
-        // We should probably keep the map visible.
-        updateMap(summaryData, currentSolar, currentBatt);
-        loadSampleWeekData(currentSolar, currentBatt, summaryData);
     }
 }
 

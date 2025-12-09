@@ -184,16 +184,16 @@ function updateLocationPanel(data, color, mode) {
 
     if (mode === 'capacity') {
         valueEl.textContent = (data.annual_cf * 100).toFixed(1) + '%';
-        labelEl.textContent = 'Annual Capacity Factor (share of the year 1 GW baseload is met)';
+        labelEl.textContent = 'Annual Capacity Factor (share of the year 1 MW baseload is met)';
         configEl.classList.remove('hidden');
         if (configTextEl) {
-            configTextEl.textContent = `Solar ${lastSolar} GW_DC • Battery ${lastBatt} GWh powering a steady 1 GW baseload.`;
+            configTextEl.textContent = `Solar ${lastSolar} MW_DC (per MW load) • Battery ${lastBatt} MWh (per MW load) powering a steady 1 MW baseload.`;
         }
         if (txInfoEl) {
             txInfoEl.classList.add('hidden');
         }
     } else if (mode === 'lcoe') {
-        const targetText = data.targetCf ? `target ${(data.targetCf * 100).toFixed(0)}% CF for 1 GW baseload` : 'target CF for 1 GW baseload';
+        const targetText = data.targetCf ? `target ${(data.targetCf * 100).toFixed(0)}% CF for 1 MW baseload` : 'target CF for 1 MW baseload';
         const deltaText = Number.isFinite(data.delta)
             ? ` (Δ ${data.delta >= 0 ? '+' : '-'}${formatCurrency(Math.abs(data.delta), 1)}/MWh vs reference)`
             : '';
@@ -203,16 +203,16 @@ function updateLocationPanel(data, color, mode) {
         } else {
             const maxText = data.maxConfigLcoe ? `>${formatCurrency(data.maxConfigLcoe)}/MWh` : '--';
             valueEl.textContent = maxText;
-            labelEl.textContent = 'Target CF not met for 1 GW requirement in this region';
+            labelEl.textContent = 'Target CF not met for 1 MW requirement in this region';
         }
         configEl.classList.remove('hidden');
         if (configTextEl) {
             if (data.meetsTarget) {
-                configTextEl.textContent = `Solar ${data.solar_gw} GW_DC • Battery ${data.batt_gwh} GWh serving 1 GW baseload.`;
+                configTextEl.textContent = `Solar ${data.solar_gw} MW_DC • Battery ${data.batt_gwh} MWh serving 1 MW baseload.`;
             } else {
                 const solar = data.maxConfigSolar ?? data.solar_gw;
                 const batt = data.maxConfigBatt ?? data.batt_gwh;
-                configTextEl.textContent = `Highest config: Solar ${solar ?? '--'} GW_DC • Battery ${batt ?? '--'} GWh`;
+                configTextEl.textContent = `Highest config: Solar ${solar ?? '--'} MW_DC • Battery ${batt ?? '--'} MWh`;
             }
         }
         if (txInfoEl) {
@@ -222,7 +222,7 @@ function updateLocationPanel(data, color, mode) {
                     txMwhEl.textContent = `${formatCurrency(data.txMetrics.savingsPerMwh, 2)}/MWh`;
                 }
                 if (txGwKmEl) {
-                    txGwKmEl.textContent = `${formatCurrency(data.txMetrics.breakevenPerGwKm)}/GW/km`;
+                    txGwKmEl.textContent = `${formatCurrency(data.txMetrics.breakevenPerGwKm / 1000)}/MW/km`;
                 }
             } else {
                 txInfoEl.classList.add('hidden');
@@ -312,7 +312,7 @@ export function updateMap(data, solarGw, battGwh) {
         marker.on('mouseover', () => {
             const content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
                 <div class="font-semibold">Capacity factor ${(d.annual_cf * 100).toFixed(1)}%</div>
-                <div class="text-slate-300">Share of the year a 1&nbsp;GW baseload is met using ${lastSolar} GW_DC solar + ${lastBatt} GWh storage.</div>
+                <div class="text-slate-300">Share of the year a 1&nbsp;MW baseload is met using ${lastSolar} MW_DC solar + ${lastBatt} MWh storage.</div>
              </div>`;
             sharedPopup.setLatLng([d.latitude, d.longitude]).setContent(content).openOn(map);
         });
@@ -600,8 +600,8 @@ export function updatePopulationSimple(popData, { baseLayer = 'population', over
                             const deltaLine = Number.isFinite(overlayData.delta)
                                 ? `<div>Cost delta vs reference: ${overlayData.delta >= 0 ? '+' : '-'}${formatCurrency(Math.abs(overlayData.delta), 2)}/MWh</div>`
                                 : '';
-                            const breakevenGw = `${formatCurrency(overlayData.txMetrics.breakevenPerGw)}/GW`;
-                            const breakevenGwKm = `${formatCurrency(overlayData.txMetrics.breakevenPerGwKm)}/GW/km`;
+                            const breakevenGw = `${formatCurrency(overlayData.txMetrics.breakevenPerGw / 1000)}/MW`;
+                            const breakevenGwKm = `${formatCurrency(overlayData.txMetrics.breakevenPerGwKm / 1000)}/MW/km`;
                             const savingsLine = overlayData.txMetrics.savingsPerMwh > 0
                                 ? `<div>Captured savings: ${formatCurrency(overlayData.txMetrics.savingsPerMwh, 2)}/MWh @ CF ${(overlayData.annual_cf * 100).toFixed(1)}%</div>`
                                 : '';
@@ -613,12 +613,12 @@ export function updatePopulationSimple(popData, { baseLayer = 'population', over
                             infoLines = `<div>Cost delta vs reference: ${overlayData.delta >= 0 ? '+' : '-'}${formatCurrency(Math.abs(overlayData.delta), 2)}/MWh</div>`;
                         }
                     } else {
-                        infoLines += `<div class="text-amber-300">Target CF for 1&nbsp;GW baseload not met in this dataset.</div>`;
-                        infoLines += `<div>Highest config (${overlayData.maxConfigSolar ?? '--'} GW_DC, ${overlayData.maxConfigBatt ?? '--'} GWh)</div>`;
+                        index = `<div class="text-amber-300">Target CF for 1&nbsp;MW baseload not met in this dataset.</div>`;
+                        infoLines += `<div>Highest config (${overlayData.maxConfigSolar ?? '--'} MW_DC, ${overlayData.maxConfigBatt ?? '--'} MWh)</div>`;
                     }
                     content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
                     <div class="font-semibold">${valueLine}</div>
-                    <div>CF ${(overlayData.annual_cf * 100).toFixed(1)}% | Solar ${overlayData.solar_gw} GW_DC | Battery ${overlayData.batt_gwh} GWh</div>
+                    <div>CF ${(overlayData.annual_cf * 100).toFixed(1)}% | Solar ${overlayData.solar_gw} MW_DC | Battery ${overlayData.batt_gwh} MWh</div>
                     ${infoLines}
                     ${populationLine}
                     ${capacityLines}
@@ -970,8 +970,8 @@ export function updateLcoeMap(bestData, options = {}) {
                         ? `<div>Cost delta vs reference: ${d.delta >= 0 ? '+' : '-'}${formatCurrency(Math.abs(d.delta), 2)}/MWh</div>`
                         : '';
                     const txMetrics = d.txMetrics;
-                    const breakevenGw = txMetrics ? `${formatCurrency(txMetrics.breakevenPerGw)}/GW` : '--';
-                    const breakevenGwKm = txMetrics ? `${formatCurrency(txMetrics.breakevenPerGwKm)}/GW/km` : '--';
+                    const breakevenGw = txMetrics ? `${formatCurrency(txMetrics.breakevenPerGw / 1000)}/MW` : '--';
+                    const breakevenGwKm = txMetrics ? `${formatCurrency(txMetrics.breakevenPerGwKm / 1000)}/MW/km` : '--';
                     const savingsLine = txMetrics && txMetrics.savingsPerMwh > 0
                         ? `<div>Captured savings: ${formatCurrency(txMetrics.savingsPerMwh, 2)}/MWh @ CF ${(d.annual_cf * 100).toFixed(1)}%</div>`
                         : '';
@@ -987,15 +987,15 @@ ${distanceLine}`;
                 }
             } else {
                 const maxText = d.maxConfigLcoe ? `>${formatCurrency(d.maxConfigLcoe)}/MWh` : '--';
-                infoLines = `<div class="text-amber-300">Target CF for 1&nbsp;GW baseload not met in this dataset.</div>
-                    <div>Highest config (${d.maxConfigSolar ?? '--'} GW_DC, ${d.maxConfigBatt ?? '--'} GWh): ${maxText}</div>`;
+                infoLines = `<div class="text-amber-300">Target CF for 1&nbsp;MW baseload not met in this dataset.</div>
+                    <div>Highest config (${d.maxConfigSolar ?? '--'} MW_DC, ${d.maxConfigBatt ?? '--'} MWh): ${maxText}</div>`;
             }
             const valueLine = d.meetsTarget
                 ? `LCOE: ${d.lcoe ? formatCurrency(d.lcoe) : '--'}/MWh`
                 : `LCOE: ${d.maxConfigLcoe ? `>${formatCurrency(d.maxConfigLcoe)}` : '--'}/MWh`;
             const content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
                 <div class="font-semibold">${valueLine}</div>
-                <div>CF ${(d.annual_cf * 100).toFixed(1)}% (share of year 1&nbsp;GW met) | Solar ${d.solar_gw} GW_DC | Battery ${d.batt_gwh} GWh</div>
+                <div>CF ${(d.annual_cf * 100).toFixed(1)}% (share of year 1&nbsp;MW met) | Solar ${d.solar_gw} MW_DC | Battery ${d.batt_gwh} MWh</div>
                 ${infoLines}
              </div>`;
             sharedPopup.setLatLng([d.latitude, d.longitude]).setContent(content).openOn(map);
@@ -1075,7 +1075,9 @@ export function updateCfMap(cfData, options = {}) {
     });
 
     cfData.forEach(d => {
-        const color = getLcoeColor({ ...d, lcoe: d.cf, meetsTarget: true }, colorInfo, colorScale);
+        // Use d.meetsTarget if present, otherwise default to true (legacy safe)
+        const meetsTarget = d.meetsTarget !== false;
+        const color = getLcoeColor({ ...d, lcoe: d.cf, meetsTarget }, colorInfo, colorScale);
 
         // Visual marker
         L.circleMarker([d.latitude, d.longitude], {
@@ -1102,15 +1104,20 @@ export function updateCfMap(cfData, options = {}) {
 
         marker.on('mouseover', () => {
             let infoLines = '';
-            if (reference && Number.isFinite(d.delta)) {
-                const deltaSign = d.delta >= 0 ? '+' : '';
-                infoLines = `<div>CF delta vs reference: ${deltaSign}${(d.delta * 100).toFixed(1)}%</div>`;
+            if (meetsTarget) {
+                if (reference && Number.isFinite(d.delta)) {
+                    const deltaSign = d.delta >= 0 ? '+' : '';
+                    infoLines = `<div>CF delta vs reference: ${deltaSign}${(d.delta * 100).toFixed(1)}%</div>`;
+                }
+            } else {
+                infoLines = `<div class="text-amber-300">Target LCOE not met.</div>
+                    <div>Lowest LCOE config:</div>`;
             }
 
             const cfPercent = (d.cf * 100).toFixed(1);
             const content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
-                <div class="font-semibold">CF: ${cfPercent}%</div>
-                <div>Solar ${d.solar_gw} GW_DC | Battery ${d.batt_gwh} GWh</div>
+                <div class="font-semibold">CF: ${meetsTarget ? cfPercent + '%' : '--'}</div>
+                <div>Solar ${d.solar_gw} MW_DC | Battery ${d.batt_gwh} MWh</div>
                 <div>LCOE: ${formatCurrency(d.lcoe)}/MWh</div>
                 ${infoLines}
              </div>`;
@@ -1128,10 +1135,10 @@ export function updateCfMap(cfData, options = {}) {
             marker.setStyle({ color: '#fff', weight: 2, radius: 6 });
             selectedMarker = marker;
 
-            updateLocationPanel({ ...d, targetLcoe }, color, 'lcoe');
+            updateLocationPanel({ ...d, targetLcoe, meetsTarget }, color, 'lcoe');
 
             if (map.onLocationSelect) {
-                map.onLocationSelect({ ...d, targetLcoe }, 'lcoe');
+                map.onLocationSelect({ ...d, targetLcoe, meetsTarget }, 'lcoe');
             }
         });
 
@@ -1148,8 +1155,9 @@ export function updateCfMap(cfData, options = {}) {
     if (reference) {
         const refRow = cfData.find(r => r.location_id === reference.location_id);
         if (refRow) {
-            const color = getLcoeColor({ ...refRow, lcoe: refRow.cf, meetsTarget: true }, colorInfo, colorScale);
-            updateLocationPanel({ ...refRow, targetLcoe }, color, 'lcoe');
+            const meetsTarget = refRow.meetsTarget !== false;
+            const color = getLcoeColor({ ...refRow, lcoe: refRow.cf, meetsTarget }, colorInfo, colorScale);
+            updateLocationPanel({ ...refRow, targetLcoe, meetsTarget }, color, 'lcoe');
         }
     }
 
@@ -1161,7 +1169,10 @@ export function updateCfMap(cfData, options = {}) {
     renderVoronoi(
         mapPoints,
         cfData,
-        (row) => getLcoeColor({ ...row, lcoe: row.cf, meetsTarget: true }, colorInfo, colorScale),
+        (row) => {
+            const meetsTarget = row.meetsTarget !== false;
+            return getLcoeColor({ ...row, lcoe: row.cf, meetsTarget }, colorInfo, colorScale);
+        },
         { enableHoverSelect: false }
     );
 }

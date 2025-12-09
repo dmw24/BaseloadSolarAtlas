@@ -24,7 +24,7 @@ const TX_LIFE = 50;
 let lcoeDisplayMode = 'delta'; // 'delta' or 'transmission'
 let populationChartCumulative = false;
 let lcoeTargetMode = 'utilization'; // 'utilization' or 'lcoe'
-let targetLcoeValue = 50; // $/MWh
+let targetLcoeValue = 90; // $/MWh
 
 // LCOE Display Mode Toggle (Delta vs Transmission Cost)
 const lcoeDisplayModeButtons = document.querySelectorAll('#lcoe-display-mode button');
@@ -79,8 +79,8 @@ let legendLock = false;
 let lockedColorInfo = null;
 let lastColorInfo = null;
 const VIEW_MODE_EXPLANATIONS = {
-    capacity: 'Capacity Factor Map shows what share of the year a given solar + storage build can sustain a 1\u00a0GW baseload.',
-    samples: 'Hourly Profile Samples replay a representative 168-hour week so you can examine solar output, storage dispatch, and any unmet 1\u00a0GW demand.',
+    capacity: 'Capacity Factor Map shows what share of the year a given solar + storage build can sustain a 1\u00a0MW baseload.',
+    samples: 'Hourly Profile Samples replay a representative 168-hour week so you can examine solar output, storage dispatch, and any unmet 1\u00a0MW demand.',
     lcoe: 'LCOE Map compares the levelized cost ($/MWh) of every location that can meet the target capacity factor.',
     population: 'Supply-Demand Matching links where people live (population density as a proxy for demand) with the CF or LCOE of each location.'
 };
@@ -376,27 +376,37 @@ function computeBestLcoeByLocation(targetCf, params) {
 function computeCfAtTargetLcoe(targetLcoe, params) {
     const results = [];
     locationIndex.forEach(rows => {
-        let bestMatch = null;
-        let minLcoeDiff = Infinity;
+        let bestConfig = null;
+        let bestFallback = null;
 
         rows.forEach(r => {
             const lcoe = computeConfigLcoe(r, params);
-            const diff = Math.abs(lcoe - targetLcoe);
+            // We store 'cf' alias for consistency with map expectations
+            const payload = { ...r, lcoe, cf: r.annual_cf, targetLcoe };
 
-            if (diff < minLcoeDiff) {
-                minLcoeDiff = diff;
-                bestMatch = {
-                    ...r,
-                    lcoe,
-                    cf: r.annual_cf,
-                    targetLcoe,
-                    lcoeDiff: lcoe - targetLcoe
-                };
+            // Logic: Find Max CF where LCOE <= Target
+            if (lcoe <= targetLcoe) {
+                if (!bestConfig) {
+                    bestConfig = payload;
+                } else if (payload.cf > bestConfig.cf) {
+                    bestConfig = payload;
+                } else if (payload.cf === bestConfig.cf && payload.lcoe < bestConfig.lcoe) {
+                    // Tie-breaker: same max CF, choose lower LCOE
+                    bestConfig = payload;
+                }
+            }
+
+            // Fallback: Track lowest LCOE config if we can't meet target
+            if (!bestFallback || lcoe < bestFallback.lcoe) {
+                bestFallback = payload;
             }
         });
 
-        if (bestMatch) {
-            results.push(bestMatch);
+        if (bestConfig) {
+            results.push({ ...bestConfig, meetsTarget: true });
+        } else if (bestFallback) {
+            // Target not met
+            results.push({ ...bestFallback, meetsTarget: false });
         }
     });
 
@@ -843,7 +853,7 @@ function updateLcoeLegend(points, overrideInfo = null) {
                 .map(p => p.txMetrics.breakevenPerGwKm)
                 .sort((a, b) => a - b);
             let domain;
-            let minLabel = '$0/GW/km';
+            let minLabel = '$0/MW/km';
             let midLabel = '--';
             let maxLabel = '--';
             if (txValues.length) {
@@ -852,15 +862,15 @@ function updateLcoeLegend(points, overrideInfo = null) {
                 const max = Math.max(rawMax, 1);
                 const mid = Math.max(pick(0.5), max * 0.5);
                 domain = [0, mid, max];
-                midLabel = `${formatCurrencyLabel(mid)}/GW/km`;
-                maxLabel = `${formatCurrencyLabel(max)}/GW/km`;
+                midLabel = `${formatCurrencyLabel(mid / 1000)}/MW/km`;
+                maxLabel = `${formatCurrencyLabel(max / 1000)}/MW/km`;
             } else {
                 domain = [0, 1, 1];
             }
             const info = {
                 type: 'tx',
                 domain,
-                title: 'Breakeven Transmission ($/GW/km)',
+                title: 'Breakeven Transmission ($/MW/km)',
                 minLabel,
                 midLabel,
                 maxLabel,
@@ -935,36 +945,14 @@ function updateLcoeLegend(points, overrideInfo = null) {
 
 // Legend for CF mode (Target LCOE)
 function updateCfLegend(points) {
-    const validCfs = points.filter(p => Number.isFinite(p.cf)).map(p => p.cf).sort((a, b) => a - b);
-
-    if (!validCfs.length) {
-        const info = {
-            type: 'cf',
-            title: 'Capacity Factor (%)',
-            minLabel: '--',
-            midLabel: '--',
-            maxLabel: '--',
-            refLabel: lcoeReference ? `Reference: ${(lcoeReference.cf * 100).toFixed(0)}%` : '',
-            gradient: 'cost', // Use same gradient as LCOE
-            showComparison: Boolean(lcoeReference),
-            domain: [0, 0.5, 1]
-        };
-        renderLegendFromInfo(info);
-        return info;
-    }
-
-    const pick = (q) => validCfs[Math.min(validCfs.length - 1, Math.max(0, Math.floor(q * validCfs.length)))];
-    const minCf = pick(0.05) || validCfs[0];
-    const midCf = pick(0.5);
-    const maxCf = pick(0.95) || validCfs[validCfs.length - 1];
-
+    // User requested fixed 0-100% scale
     const info = {
         type: 'cf',
-        domain: [minCf, midCf, maxCf],
+        domain: [0, 0.33, 0.66, 1.0],
         title: 'Capacity Factor (%)',
-        minLabel: `${(minCf * 100).toFixed(0)}%`,
-        midLabel: `${(midCf * 100).toFixed(0)}%`,
-        maxLabel: `${(maxCf * 100).toFixed(0)}%`,
+        minLabel: '0%',
+        midLabel: '50%',
+        maxLabel: '100%',
         refLabel: lcoeReference ? `Reference: ${(lcoeReference.cf * 100).toFixed(0)}%` : '',
         gradient: 'cost',
         showComparison: Boolean(lcoeReference)
@@ -1593,7 +1581,7 @@ function handleSolarInput(value, source) {
     solarVal.textContent = val;
     if (solarSlider) solarSlider.value = val;
 
-    // Auto-adjust battery: if solar > 10 GW and battery < 18 GWh, set battery to 18 GWh
+    // Auto-adjust battery: if solar > 10 MW and battery < 18 MWh, set battery to 18 MWh
     if (val > 10 && currentBatt < 18) {
         currentBatt = 18;
         battVal.textContent = 18;

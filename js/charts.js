@@ -47,7 +47,7 @@ export function initCharts() {
                     },
                     y: {
                         stacked: true,
-                        title: { display: true, text: 'GW' },
+                        title: { display: true, text: 'MW' },
                         min: 0,
                         max: 10 // Fixed scale for consistency? Or dynamic? Let's try dynamic first.
                     },
@@ -56,7 +56,7 @@ export function initCharts() {
                         display: false, // Hide SoC axis, overlay it?
                         position: 'right',
                         min: 0,
-                        max: 22 // Battery GWh
+                        max: 22 // Battery MWh
                     }
                 },
                 interaction: {
@@ -93,7 +93,7 @@ export function updateCharts(sampleData) {
         // 3. Unserved (Bar)
 
         // Better visualization for "Baseload":
-        // Stacked Bar reaching 1.0 GW (Baseload):
+        // Stacked Bar reaching 1.0 MW (Baseload):
         // - Solar Directly Used
         // - Battery Discharge
         // - Unserved Load
@@ -110,7 +110,7 @@ export function updateCharts(sampleData) {
         // "Battery Discharge" = flow > 0 ? flow : 0.
         // "Unserved" = unserved.
 
-        // These three should sum to 1.0 GW (approximately).
+        // These three should sum to 1.0 MW (approximately).
 
         const solarUsed = data.solar_gen.map(g => Math.min(g, 1.0));
         const battDischarge = data.battery_flow.map(f => f > 0 ? f : 0);
@@ -160,7 +160,7 @@ export function updateCharts(sampleData) {
             },
             {
                 type: 'line',
-                label: 'SoC (GWh)',
+                label: 'SoC (MWh)',
                 data: data.soc,
                 borderColor: COLORS.soc,
                 borderWidth: 2,

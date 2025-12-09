@@ -78,14 +78,18 @@ export async function loadSampleWeekData(solarGw, battGwh, summaryData) {
         stopPlayback();
     }
 
-    console.log(`Loading sample week data for Solar ${solarGw} GW, Battery ${battGwh} GWh`);
+    console.log(`Loading sample week data for Solar ${solarGw} MW, Battery ${battGwh} MWh`);
+    selectedSeason = weekSelect.value;
 
-    // Guard: samples not generated for high-solar + small battery
-    if (solarGw > 10 && battGwh <= 16) {
+    const key = `sol${solarGw}batt${battGwh}`;
+    if (!['sol1batt0', 'sol5batt8', 'sol10batt18', 'sol5batt4', 'sol20batt36'].includes(key) && solarGw > 10 && battGwh < 18) {
         sampleWeekData = null;
-        weekSelect.innerHTML = '<option>Not available for this config (use Batt > 16 GWh or Solar ≤ 10 GW)</option>';
-        hideSampleChart();
+        weekSelect.innerHTML = '<option>Not available for this config (use Batt > 16 MWh or Solar ≤ 10 MW)</option>';
+        weekSelect.disabled = true;
+        resetSampleChartState('Select a standard config to see sample data', true);
         return;
+    } else {
+        weekSelect.disabled = false; // Re-enable if a valid config is selected
     }
 
     try {
@@ -358,7 +362,7 @@ function renderFrame(season, frameIndex) {
         const discharge = battFlow > 0 ? battFlow : 0;
         // const discharge = Math.abs(battFlow); // Fallback if unsure
 
-        // Calculate shares of a 1.0 GW load
+        // Calculate shares of a 1.0 MW load
         // If charging, we assume load is fully met by solar (1.0)
         // If discharging, we use solarGen + discharge
 
@@ -548,7 +552,7 @@ function renderSampleChartForSelected(forceShow = true) {
                     stack: 'charge'
                 },
                 {
-                    label: 'Demand (1 GW)',
+                    label: 'Demand (1 MW)',
                     data: demandData,
                     type: 'line',
                     borderColor: '#f87171',
@@ -579,7 +583,7 @@ function renderSampleChartForSelected(forceShow = true) {
                         label: ctx => {
                             const label = ctx.dataset.label || '';
                             const value = ctx.parsed.y !== undefined ? ctx.parsed.y : ctx.parsed;
-                            return `${label}: ${value.toFixed(2)} GW`;
+                            return `${label}: ${value.toFixed(2)} MW`;
                         }
                     }
                 }
@@ -595,11 +599,11 @@ function renderSampleChartForSelected(forceShow = true) {
                     suggestedMax: yMax,
                     ticks: {
                         color: '#94a3b8',
-                        callback: val => `${val} GW`
+                        callback: val => `${val} MW`
                     },
                     title: {
                         display: true,
-                        text: 'Output / Load (GW)',
+                        text: 'Output / Load (MW)',
                         color: '#cbd5f5',
                         font: { size: 11 }
                     }

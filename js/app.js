@@ -1,5 +1,5 @@
 import { loadSummary, loadPopulationCsv, loadVoronoiGeojson, loadFossilPlantsCsv, loadVoronoiFossilCapacityCsv } from './data.js';
-import { initMap, updateMap, updateLcoeMap, updatePopulationSimple } from './map.js';
+import { initMap, updateMap, updateLcoeMap, updateCfMap, updatePopulationSimple } from './map.js';
 import { initSampleDays, loadSampleWeekData, cleanupSampleDays } from './samples.js';
 
 // State
@@ -23,6 +23,8 @@ const TX_WACC = 0.06;
 const TX_LIFE = 50;
 let lcoeDisplayMode = 'delta'; // 'delta' or 'transmission'
 let populationChartCumulative = false;
+let lcoeTargetMode = 'utilization'; // 'utilization' or 'lcoe'
+let targetLcoeValue = 50; // $/MWh
 
 // LCOE Display Mode Toggle (Delta vs Transmission Cost)
 const lcoeDisplayModeButtons = document.querySelectorAll('#lcoe-display-mode button');
@@ -127,6 +129,10 @@ const batteryOpexInput = document.getElementById('battery-opex');
 const solarLifeInput = document.getElementById('solar-life');
 const batteryLifeInput = document.getElementById('battery-life');
 const waccInput = document.getElementById('wacc');
+const lcoeTargetModeButtons = document.querySelectorAll('#lcoe-target-mode-toggle button');
+const targetCfContainer = document.getElementById('target-cf-container');
+const targetLcoeContainer = document.getElementById('target-lcoe-container');
+const targetLcoeInput = document.getElementById('target-lcoe-input');
 
 // Population Elements
 const populationBaseButtons = document.querySelectorAll('#population-base-toggle button');
@@ -363,6 +369,37 @@ function computeBestLcoeByLocation(targetCf, params) {
             results.push(chosen);
         }
     });
+    return results;
+}
+
+// Similar to above, but for target LCOE mode: find config with CF closest to achieving target LCOE
+function computeCfAtTargetLcoe(targetLcoe, params) {
+    const results = [];
+    locationIndex.forEach(rows => {
+        let bestMatch = null;
+        let minLcoeDiff = Infinity;
+
+        rows.forEach(r => {
+            const lcoe = computeConfigLcoe(r, params);
+            const diff = Math.abs(lcoe - targetLcoe);
+
+            if (diff < minLcoeDiff) {
+                minLcoeDiff = diff;
+                bestMatch = {
+                    ...r,
+                    lcoe,
+                    cf: r.annual_cf,
+                    targetLcoe,
+                    lcoeDiff: lcoe - targetLcoe
+                };
+            }
+        });
+
+        if (bestMatch) {
+            results.push(bestMatch);
+        }
+    });
+
     return results;
 }
 
@@ -896,6 +933,47 @@ function updateLcoeLegend(points, overrideInfo = null) {
     return info;
 }
 
+// Legend for CF mode (Target LCOE)
+function updateCfLegend(points) {
+    const validCfs = points.filter(p => Number.isFinite(p.cf)).map(p => p.cf).sort((a, b) => a - b);
+
+    if (!validCfs.length) {
+        const info = {
+            type: 'cf',
+            title: 'Capacity Factor (%)',
+            minLabel: '--',
+            midLabel: '--',
+            maxLabel: '--',
+            refLabel: lcoeReference ? `Reference: ${(lcoeReference.cf * 100).toFixed(0)}%` : '',
+            gradient: 'cost', // Use same gradient as LCOE
+            showComparison: Boolean(lcoeReference),
+            domain: [0, 0.5, 1]
+        };
+        renderLegendFromInfo(info);
+        return info;
+    }
+
+    const pick = (q) => validCfs[Math.min(validCfs.length - 1, Math.max(0, Math.floor(q * validCfs.length)))];
+    const minCf = pick(0.05) || validCfs[0];
+    const midCf = pick(0.5);
+    const maxCf = pick(0.95) || validCfs[validCfs.length - 1];
+
+    const info = {
+        type: 'cf',
+        domain: [minCf, midCf, maxCf],
+        title: 'Capacity Factor (%)',
+        minLabel: `${(minCf * 100).toFixed(0)}%`,
+        midLabel: `${(midCf * 100).toFixed(0)}%`,
+        maxLabel: `${(maxCf * 100).toFixed(0)}%`,
+        refLabel: lcoeReference ? `Reference: ${(lcoeReference.cf * 100).toFixed(0)}%` : '',
+        gradient: 'cost',
+        showComparison: Boolean(lcoeReference)
+    };
+
+    renderLegendFromInfo(info);
+    return info;
+}
+
 function queueLcoeUpdate() {
     // Check if we need to update LCOE view
     const isLcoeMode = currentViewMode === 'lcoe';
@@ -1415,15 +1493,40 @@ function prepareLcoeDisplayData() {
 }
 
 function updateLcoeView() {
-    const prepared = prepareLcoeDisplayData();
-    if (!prepared) return;
-    const { resultsWithDelta, ref, colorInfo } = prepared;
+    if (lcoeTargetMode === 'utilization') {
+        // Existing mode: Show LCOE to achieve target CF
+        const prepared = prepareLcoeDisplayData();
+        if (!prepared) return;
+        const { resultsWithDelta, ref, colorInfo } = prepared;
 
-    updateLcoeMap(resultsWithDelta, {
-        targetCf: lcoeParams.targetCf,
-        colorInfo,
-        reference: ref
-    });
+        updateLcoeMap(resultsWithDelta, {
+            targetCf: lcoeParams.targetCf,
+            colorInfo,
+            reference: ref
+        });
+    } else {
+        // New mode: Show CF heatmap at target LCOE
+        if (!summaryData.length || locationIndex.size === 0) return;
+
+        // Calculate which config achieves closest to target LCOE for each location
+        const cfResults = computeCfAtTargetLcoe(targetLcoeValue, lcoeParams);
+
+        // Prepare with delta (no transmission logic in this mode)
+        const ref = lcoeReference ? cfResults.find(r => r.location_id === lcoeReference.location_id) || null : null;
+        const resultsWithDelta = cfResults.map(r => {
+            const delta = ref ? r.cf - ref.cf : null;
+            return { ...r, delta };
+        });
+
+        // Update legend for CF display
+        const colorInfo = updateCfLegend(resultsWithDelta);
+
+        updateCfMap(resultsWithDelta, {
+            targetLcoe: targetLcoeValue,
+            colorInfo,
+            reference: ref
+        });
+    }
 }
 
 function updatePopulationView() {
@@ -1719,6 +1822,51 @@ function initUIEvents() {
         targetCfVal.textContent = pct;
         queueLcoeUpdate();
     });
+
+    // Target Mode Toggle
+    lcoeTargetModeButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const mode = btn.dataset.targetMode;
+            if (mode === lcoeTargetMode) return;
+
+            lcoeTargetMode = mode;
+
+            // Update button styles
+            lcoeTargetModeButtons.forEach(b => {
+                const isActive = b.dataset.targetMode === mode;
+                b.classList.toggle('bg-gray-600', isActive);
+                b.classList.toggle('text-white', isActive);
+                b.classList.toggle('shadow-sm', isActive);
+                b.classList.toggle('text-gray-400', !isActive);
+                b.classList.toggle('hover:text-white', !isActive);
+            });
+
+            // Toggle input containers
+            if (mode === 'utilization') {
+                targetCfContainer.classList.remove('hidden');
+                targetLcoeContainer.classList.add('hidden');
+            } else {
+                targetCfContainer.classList.add('hidden');
+                targetLcoeContainer.classList.remove('hidden');
+            }
+
+            // Update view
+            if (currentViewMode === 'lcoe') {
+                updateLcoeView();
+            }
+        });
+    });
+
+    // Target LCOE Input
+    if (targetLcoeInput) {
+        targetLcoeInput.addEventListener('input', (e) => {
+            const value = parseFloat(e.target.value) || 50;
+            targetLcoeValue = Math.max(0, value);
+            if (currentViewMode === 'lcoe' && lcoeTargetMode === 'lcoe') {
+                queueLcoeUpdate();
+            }
+        });
+    }
 
     [solarCapexInput, batteryCapexInput, solarOpexInput, batteryOpexInput, solarLifeInput, batteryLifeInput, waccInput].forEach(input => {
         input.addEventListener('change', updateLcoeParams);

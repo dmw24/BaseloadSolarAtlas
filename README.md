@@ -333,10 +333,3 @@ Based on the data structure, the offline simulation likely made these assumption
 - Apache Arrow, Apache Parquet
 - Tailwind CSS
 
-## License
-
-[Add your license information here]
-
-## Contact
-
-[Add contact information here]

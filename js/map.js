@@ -913,6 +913,7 @@ export function updateLcoeMap(bestData, options = {}) {
     selectedMarker = null;
 
     markersLayer.clearLayers();
+    overlayLayer.clearLayers();
     d3.select(voronoiLayer._container).selectAll("*").remove();
 
     if (!bestData || bestData.length === 0) {
@@ -1048,6 +1049,123 @@ ${distanceLine}`;
     );
 }
 
+// Similar to updateLcoeMap but for CF display (Target LCOE mode)
+export function updateCfMap(cfData, options = {}) {
+    currentMode = 'lcoe'; // Keep as lcoe mode for consistency
+    selectedMarker = null;
+
+    markersLayer.clearLayers();
+    overlayLayer.clearLayers();
+    d3.select(voronoiLayer._container).selectAll("*").remove();
+
+    if (!cfData || cfData.length === 0) {
+        return;
+    }
+
+    const targetLcoe = options.targetLcoe || null;
+    const colorInfo = options.colorInfo || { type: 'cf', domain: [0, 0.5, 1] };
+    const reference = options.reference || null;
+
+    const colorScale = buildLcoeColorScaleFromInfo(colorInfo);
+
+    const sharedPopup = L.popup({
+        closeButton: false,
+        autoPan: false,
+        className: 'bg-transparent border-none shadow-none'
+    });
+
+    cfData.forEach(d => {
+        const color = getLcoeColor({ ...d, lcoe: d.cf, meetsTarget: true }, colorInfo, colorScale);
+
+        // Visual marker
+        L.circleMarker([d.latitude, d.longitude], {
+            radius: 0.8,
+            fillColor: color,
+            color: color,
+            weight: 0,
+            opacity: 1,
+            fillOpacity: 0.9,
+            pane: 'markers',
+            interactive: false
+        }).addTo(markersLayer);
+
+        // Hit marker
+        const marker = L.circleMarker([d.latitude, d.longitude], {
+            radius: 4.5,
+            fillColor: '#fff',
+            color: '#fff',
+            weight: 0,
+            opacity: 0,
+            fillOpacity: 0,
+            pane: 'markers'
+        });
+
+        marker.on('mouseover', () => {
+            let infoLines = '';
+            if (reference && Number.isFinite(d.delta)) {
+                const deltaSign = d.delta >= 0 ? '+' : '';
+                infoLines = `<div>CF delta vs reference: ${deltaSign}${(d.delta * 100).toFixed(1)}%</div>`;
+            }
+
+            const cfPercent = (d.cf * 100).toFixed(1);
+            const content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
+                <div class="font-semibold">CF: ${cfPercent}%</div>
+                <div>Solar ${d.solar_gw} GW_DC | Battery ${d.batt_gwh} GWh</div>
+                <div>LCOE: ${formatCurrency(d.lcoe)}/MWh</div>
+                ${infoLines}
+             </div>`;
+            sharedPopup.setLatLng([d.latitude, d.longitude]).setContent(content).openOn(map);
+        });
+
+        marker.on('mouseout', () => {
+            map.closePopup(sharedPopup);
+        });
+
+        marker.on('click', () => {
+            if (selectedMarker) {
+                selectedMarker.setStyle({ stroke: false, color: '#000', weight: 1, radius: 4 });
+            }
+            marker.setStyle({ color: '#fff', weight: 2, radius: 6 });
+            selectedMarker = marker;
+
+            updateLocationPanel({ ...d, targetLcoe }, color, 'lcoe');
+
+            if (map.onLocationSelect) {
+                map.onLocationSelect({ ...d, targetLcoe }, 'lcoe');
+            }
+        });
+
+        // Highlight reference if present
+        if (reference && reference.location_id === d.location_id) {
+            marker.setStyle({ color: '#f59e0b', weight: 3, radius: 6, opacity: 1 });
+            selectedMarker = marker;
+        }
+
+        marker.addTo(markersLayer);
+    });
+
+    // Refresh location panel for reference
+    if (reference) {
+        const refRow = cfData.find(r => r.location_id === reference.location_id);
+        if (refRow) {
+            const color = getLcoeColor({ ...refRow, lcoe: refRow.cf, meetsTarget: true }, colorInfo, colorScale);
+            updateLocationPanel({ ...refRow, targetLcoe }, color, 'lcoe');
+        }
+    }
+
+    const mapPoints = cfData.map(d => {
+        const point = map.latLngToLayerPoint([d.latitude, d.longitude]);
+        return [point.x, point.y];
+    });
+
+    renderVoronoi(
+        mapPoints,
+        cfData,
+        (row) => getLcoeColor({ ...row, lcoe: row.cf, meetsTarget: true }, colorInfo, colorScale),
+        { enableHoverSelect: false }
+    );
+}
+
 function renderVoronoi(mapPoints, data, fillAccessor, options = {}) {
     const { enableHoverSelect = true } = options;
     const svg = d3.select(voronoiLayer._container);
@@ -1145,6 +1263,7 @@ export function updateMapWithSampleFrame(frameData) {
 
     // Clear existing visual layers
     markersLayer.clearLayers();
+    overlayLayer.clearLayers();
     sampleMarkers.clear();
 
     const samplePopup = L.popup({

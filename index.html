@@ -148,8 +148,23 @@
             </div>
 
             <div class="space-y-4">
-                <!-- Target CF Slider -->
+                <!-- Target Mode Toggle -->
                 <div class="space-y-2">
+                    <label class="text-xs text-gray-400 uppercase">Target Mode</label>
+                    <div id="lcoe-target-mode-toggle" class="grid grid-cols-2 bg-surface-variant rounded-lg p-1">
+                        <button data-target-mode="utilization"
+                            class="px-3 py-1.5 rounded-md text-xs font-medium bg-gray-600 text-white shadow-sm">
+                            Utilization
+                        </button>
+                        <button data-target-mode="lcoe"
+                            class="px-3 py-1.5 rounded-md text-xs font-medium text-gray-400 hover:text-white">
+                            LCOE
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Target CF Slider (visible in Utilization mode) -->
+                <div id="target-cf-container" class="space-y-2">
                     <label class="text-xs text-gray-400 uppercase">Target Capacity Factor</label>
                     <div class="flex items-center gap-3">
                         <input type="range" id="target-cf-slider" min="50" max="100" step="1" value="90"
@@ -157,6 +172,13 @@
                         <span class="text-sm font-mono text-emerald-400 w-12 text-right"><span
                                 id="target-cf-val">90</span>%</span>
                     </div>
+                </div>
+
+                <!-- Target LCOE Input (visible in LCOE mode) -->
+                <div id="target-lcoe-container" class="hidden space-y-2">
+                    <label class="text-xs text-gray-400 uppercase">Target LCOE ($/MWh)</label>
+                    <input type="number" id="target-lcoe-input" value="50" step="5" min="0"
+                        class="w-full bg-surface-variant border border-white/10 rounded px-3 py-2 text-sm text-white">
                 </div>
 
                 <!-- LCOE Params Grid -->

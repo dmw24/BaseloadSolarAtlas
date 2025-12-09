@@ -262,7 +262,7 @@
 
         <!-- Population Controls (Only visible in Population mode) -->
         <div id="population-controls"
-            class="hidden pointer-events-auto bg-surface/90 backdrop-blur-md border border-white/10 rounded-2xl shadow-xl p-5 space-y-4">
+            class="hidden pointer-events-auto bg-surface/90 backdrop-blur-md border border-white/10 rounded-2xl shadow-xl p-5 space-y-4 max-h-[80vh] overflow-y-auto">
             <!-- Population specific controls here - simplified for now -->
             <div class="space-y-3">
                 <label class="text-xs font-medium text-gray-400 uppercase tracking-wider">Demand Layer</label>
@@ -270,8 +270,66 @@
                     <button data-base="population"
                         class="px-3 py-1.5 rounded-md text-xs font-medium bg-gray-600 text-white shadow-sm">Population</button>
                     <button data-base="plants"
-                        class="px-3 py-1.5 rounded-md text-xs font-medium text-gray-400 hover:text-white">Fossil
-                        Plants</button>
+                        class="px-3 py-1.5 rounded-md text-xs font-medium text-gray-400 hover:text-white">Power
+                        Demand</button>
+                </div>
+                <p id="population-demand-description" class="hidden text-[10px] text-gray-500 leading-tight">
+                    Can be indexed by existing and announced generation capacity. Installed capacity reflects today’s
+                    demand;
+                    announced capacity indicates where demand is expected to grow.
+                </p>
+            </div>
+
+            <!-- Plant Status Toggle (visible when baseLayer === 'plants') -->
+            <div id="plant-status-toggle" class="hidden space-y-3">
+                <label class="text-xs font-medium text-gray-400 uppercase tracking-wider">Plant Status</label>
+                <div id="plant-status-buttons" class="grid grid-cols-2 bg-surface-variant rounded-lg p-1">
+                    <button data-status="announced"
+                        class="px-3 py-1.5 rounded-md text-xs font-medium bg-gray-600 text-white shadow-sm">Announced</button>
+                    <button data-status="existing"
+                        class="px-3 py-1.5 rounded-md text-xs font-medium text-gray-400 hover:text-white">Existing</button>
+                </div>
+            </div>
+
+            <!-- Fuel Type Filter (visible when baseLayer === 'plants') -->
+            <div id="plant-fuel-filter" class="hidden space-y-2">
+                <label class="text-xs font-medium text-gray-400 uppercase tracking-wider">Fuel Types</label>
+                <div class="flex flex-wrap gap-2">
+                    <button data-fuel="coal"
+                        class="px-2 py-1 rounded-md text-xs font-medium bg-slate-700 text-slate-100 hover:bg-slate-600 transition-colors">Coal</button>
+                    <button data-fuel="oil_gas"
+                        class="px-2 py-1 rounded-md text-xs font-medium bg-slate-700 text-slate-100 hover:bg-slate-600 transition-colors">Oil
+                        & Gas</button>
+                    <button data-fuel="bioenergy"
+                        class="px-2 py-1 rounded-md text-xs font-medium bg-slate-700 text-slate-100 hover:bg-slate-600 transition-colors">Bioenergy</button>
+                    <button data-fuel="nuclear"
+                        class="px-2 py-1 rounded-md text-xs font-medium bg-slate-700 text-slate-100 hover:bg-slate-600 transition-colors">Nuclear</button>
+                </div>
+            </div>
+
+            <!-- Plant Legend (visible when baseLayer === 'plants') -->
+            <div id="plant-legend" class="hidden space-y-2 pt-2 border-t border-white/10">
+                <div class="grid grid-cols-2 gap-2 text-xs text-gray-400">
+                    <div id="legend-item-coal"
+                        class="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+                        title="Toggle Coal">
+                        <span class="w-2 h-2 rounded-full bg-orange-500"></span> Coal
+                    </div>
+                    <div id="legend-item-oil_gas"
+                        class="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+                        title="Toggle Oil & Gas">
+                        <span class="w-2 h-2 rounded-full bg-sky-400"></span> Oil & Gas
+                    </div>
+                    <div id="legend-item-bioenergy"
+                        class="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+                        title="Toggle Bioenergy">
+                        <span class="w-2 h-2 rounded-full bg-lime-500"></span> Bioenergy
+                    </div>
+                    <div id="legend-item-nuclear"
+                        class="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+                        title="Toggle Nuclear">
+                        <span class="w-2 h-2 rounded-full bg-purple-500"></span> Nuclear
+                    </div>
                 </div>
             </div>
 

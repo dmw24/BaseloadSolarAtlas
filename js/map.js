@@ -10,7 +10,7 @@ let sampleLocationHandler = null;
 let populationOverlay = false;
 let populationData = null;
 let populationScale = null;
-const ALL_FOSSIL_FUELS = ['coal', 'gas', 'oil'];
+const ALL_FOSSIL_FUELS = ['coal', 'oil_gas', 'bioenergy', 'nuclear'];
 
 // Helper function
 function capitalizeWord(str = '') {
@@ -31,8 +31,9 @@ function getColor(cf) {
 
 const FOSSIL_COLORS = {
     coal: '#f97316',
-    gas: '#38bdf8',
-    oil: '#f43f5e'
+    oil_gas: '#38bdf8',
+    bioenergy: '#84cc16',
+    nuclear: '#a855f7'
 };
 
 function buildPopulationScale(values) {
@@ -137,6 +138,8 @@ export async function initMap(onLocationSelect) {
             updateMap(lastData, lastSolar, lastBatt);
         } else if (currentMode === 'lcoe' && lastLcoeData) {
             updateLcoeMap(lastLcoeData, lastLcoeOptions || {});
+        } else if (currentMode === 'lcoe_cf' && lastCfData) {
+            updateCfMap(lastCfData, lastCfOptions || {});
         } else if (currentMode === 'samples' && lastSampleFrame) {
             updateMapWithSampleFrame(lastSampleFrame);
         }
@@ -163,6 +166,8 @@ let lastSolar = null;
 let lastBatt = null;
 let lastLcoeData = null;
 let lastLcoeOptions = null;
+let lastCfData = null; // Data for Target Mode (CF Map)
+let lastCfOptions = null; // Options for Target Mode (CF Map)
 let lastSampleFrame = null;
 let lastPopulationData = null;
 
@@ -497,7 +502,7 @@ function roundedKey(lat, lon, decimals = 4) {
     return `${lat.toFixed(decimals)},${lon.toFixed(decimals)}`;
 }
 
-export function updatePopulationSimple(popData, { baseLayer = 'population', overlayMode = 'none', cfData = [], lcoeData = [], lcoeColorInfo = null, targetCf = null, comparisonMetric = 'lcoe', fossilPlants = [], fossilCapacityMap = null, selectedFuels = ALL_FOSSIL_FUELS } = {}) {
+export function updatePopulationSimple(popData, { baseLayer = 'population', overlayMode = 'none', cfData = [], lcoeData = [], lcoeColorInfo = null, targetCf = null, comparisonMetric = 'lcoe', fossilPlants = [], fossilCapacityMap = null, selectedFuels = ALL_FOSSIL_FUELS, selectedStatus = 'announced' } = {}) {
     currentMode = 'population';
     lastPopulationData = popData;
     selectedMarker = null;
@@ -602,13 +607,13 @@ export function updatePopulationSimple(popData, { baseLayer = 'population', over
                                 : '';
                             const breakevenGw = `${formatCurrency(overlayData.txMetrics.breakevenPerGw / 1000)}/MW`;
                             const breakevenGwKm = `${formatCurrency(overlayData.txMetrics.breakevenPerGwKm / 1000)}/MW/km`;
-                            const savingsLine = overlayData.txMetrics.savingsPerMwh > 0
-                                ? `<div>Captured savings: ${formatCurrency(overlayData.txMetrics.savingsPerMwh, 2)}/MWh @ CF ${(overlayData.annual_cf * 100).toFixed(1)}%</div>`
-                                : '';
+
                             const distanceLine = Number.isFinite(overlayData.txMetrics.distanceKm)
                                 ? `<div>Approx. straight-line distance: ${formatNumber(overlayData.txMetrics.distanceKm, 0)} km</div>`
                                 : `<div>Approx. straight-line distance: --</div>`;
-                            infoLines = `${deltaLine}\n${showTxCost ? `<div>Breakeven transmission: ${breakevenGw} (${breakevenGwKm})</div>` : ''}\n${savingsLine}\n${distanceLine}`;
+
+                            // Cleaned up info lines: Removed redundant savings line, ensures prompt TX cost display
+                            infoLines = `${deltaLine}\n<div>Breakeven transmission: ${breakevenGw} (${breakevenGwKm})</div>\n${distanceLine}`;
                         } else if (lcoeColorInfo?.type === 'delta' && Number.isFinite(overlayData.delta)) {
                             infoLines = `<div>Cost delta vs reference: ${overlayData.delta >= 0 ? '+' : '-'}${formatCurrency(Math.abs(overlayData.delta), 2)}/MWh</div>`;
                         }
@@ -668,7 +673,7 @@ export function updatePopulationSimple(popData, { baseLayer = 'population', over
     });
 
     const filteredPlants = baseLayer === 'plants' && Array.isArray(fossilPlants)
-        ? fossilPlants.filter(plant => selectedFuelSet.has(plant.fuel_group))
+        ? fossilPlants.filter(plant => selectedFuelSet.has(plant.fuel_group) && plant.status === selectedStatus)
         : [];
 
     if (filteredPlants.length) {
@@ -696,6 +701,7 @@ export function updatePopulationSimple(popData, { baseLayer = 'population', over
                 const content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs">
                     <div class="font-semibold">${plant.plant_name || 'Power plant'}</div>
                     <div>${plant.fuel_group.toUpperCase()} • ${cap} MW</div>
+                    <div class="text-slate-300">${capitalizeWord(plant.status)}</div>
                     <div class="text-slate-400">${plant.country || 'Unknown'}</div>
                  </div>`;
                 plantPopup.setLatLng([plant.latitude, plant.longitude]).setContent(content).openOn(map);
@@ -972,15 +978,14 @@ export function updateLcoeMap(bestData, options = {}) {
                     const txMetrics = d.txMetrics;
                     const breakevenGw = txMetrics ? `${formatCurrency(txMetrics.breakevenPerGw / 1000)}/MW` : '--';
                     const breakevenGwKm = txMetrics ? `${formatCurrency(txMetrics.breakevenPerGwKm / 1000)}/MW/km` : '--';
-                    const savingsLine = txMetrics && txMetrics.savingsPerMwh > 0
-                        ? `<div>Captured savings: ${formatCurrency(txMetrics.savingsPerMwh, 2)}/MWh @ CF ${(d.annual_cf * 100).toFixed(1)}%</div>`
-                        : '';
+
                     const distanceLine = txMetrics && Number.isFinite(txMetrics.distanceKm)
                         ? `<div>Approx. straight-line distance: ${formatNumber(txMetrics.distanceKm, 0)} km</div>`
                         : `<div>Approx. straight-line distance: --</div>`;
+
+                    // Cleaned up info lines: Removed redundant savings line, ensures prompt TX cost display
                     infoLines = `${deltaLine}
-${window.showTxCost ? `<div>Breakeven transmission: ${breakevenGw} (${breakevenGwKm})</div>` : ''}
-${savingsLine}
+<div>Breakeven transmission: ${breakevenGw} (${breakevenGwKm})</div>
 ${distanceLine}`;
                 } else if (Number.isFinite(d.delta)) {
                     infoLines = `<div>Cost delta vs reference: ${d.delta >= 0 ? '+' : '-'}${formatCurrency(Math.abs(d.delta), 2)}/MWh</div>`;
@@ -1051,7 +1056,9 @@ ${distanceLine}`;
 
 // Similar to updateLcoeMap but for CF display (Target LCOE mode)
 export function updateCfMap(cfData, options = {}) {
-    currentMode = 'lcoe'; // Keep as lcoe mode for consistency
+    currentMode = 'lcoe_cf'; // Use distinct mode for Target Mode (CF Map)
+    lastCfData = cfData;
+    lastCfOptions = options;
     selectedMarker = null;
 
     markersLayer.clearLayers();

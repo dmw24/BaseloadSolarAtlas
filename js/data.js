@@ -63,10 +63,10 @@ export async function loadPopulationCsv() {
     }));
 }
 
-export async function loadFossilPlantsCsv() {
-    const response = await fetch('data/fossil_plants.csv');
+export async function loadGemPlantsCsv() {
+    const response = await fetch('data/gem_plants.csv');
     if (!response.ok) {
-        throw new Error('Fossil plant CSV not found at data/fossil_plants.csv');
+        throw new Error('GEM plants CSV not found at data/gem_plants.csv');
     }
     const rows = parseCsv(await response.text());
     return rows
@@ -76,33 +76,31 @@ export async function loadFossilPlantsCsv() {
             fuel_group: (row.fuel_group || '').toLowerCase(),
             capacity_mw: Number(row.capacity_mw),
             latitude: Number(row.latitude),
-            longitude: Number(row.longitude)
+            longitude: Number(row.longitude),
+            status: (row.status || 'existing').toLowerCase()
         }))
         .filter(p => Number.isFinite(p.latitude) && Number.isFinite(p.longitude));
 }
 
-export async function loadVoronoiFossilCapacityCsv() {
-    const response = await fetch('data/voronoi_fossil_capacity.csv');
+export async function loadVoronoiGemCapacityCsv() {
+    const response = await fetch('data/voronoi_gem_capacity.csv');
     if (!response.ok) {
-        throw new Error('Voronoi fossil capacity CSV not found at data/voronoi_fossil_capacity.csv');
+        throw new Error('Voronoi fossil capacity CSV not found at data/voronoi_gem_capacity.csv');
     }
     const rows = parseCsv(await response.text());
     return rows.map(row => ({
         location_id: Number(row.location_id),
         latitude: Number(row.latitude),
         longitude: Number(row.longitude),
-        coal_mw: Number(row.coal_mw),
-        gas_mw: Number(row.gas_mw),
-        oil_mw: Number(row.oil_mw)
+        coal_Announced: Number(row.coal_Announced) || 0,
+        coal_Existing: Number(row.coal_Existing) || 0,
+        oil_gas_Announced: Number(row.oil_gas_Announced) || 0,
+        oil_gas_Existing: Number(row.oil_gas_Existing) || 0,
+        bioenergy_Announced: Number(row.bioenergy_Announced) || 0,
+        bioenergy_Existing: Number(row.bioenergy_Existing) || 0,
+        nuclear_Announced: Number(row.nuclear_Announced) || 0,
+        nuclear_Existing: Number(row.nuclear_Existing) || 0
     }));
-}
-
-export async function loadVoronoiGeojson() {
-    const response = await fetch('data/voronoi_cells.geojson');
-    if (!response.ok) {
-        throw new Error('Voronoi GeoJSON not found at data/voronoi_cells.geojson');
-    }
-    return response.json();
 }
 
 export async function loadSample(solarGw, battGwh) {

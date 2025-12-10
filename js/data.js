@@ -128,3 +128,19 @@ export async function loadSample(solarGw, battGwh) {
 
     return data;
 }
+
+export async function loadElectricityDemandData() {
+    try {
+        const response = await fetch('data/voronoi_electricity_demand.csv');
+        const text = await response.text();
+        return d3.csvParse(text, (d) => ({
+            location_id: +d.location_id,
+            latitude: +d.latitude,
+            longitude: +d.longitude,
+            annual_demand_kwh: +d.annual_demand_kwh
+        }));
+    } catch (e) {
+        console.error("Error loading electricity demand data:", e);
+        return [];
+    }
+}

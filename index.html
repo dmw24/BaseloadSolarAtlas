@@ -266,17 +266,18 @@
             <!-- Population specific controls here - simplified for now -->
             <div class="space-y-3">
                 <label class="text-xs font-medium text-gray-400 uppercase tracking-wider">Demand Layer</label>
-                <div id="population-base-toggle" class="grid grid-cols-2 bg-surface-variant rounded-lg p-1">
+                <div id="population-base-toggle" class="grid grid-cols-1 gap-1 bg-surface-variant rounded-lg p-1">
                     <button data-base="population"
-                        class="px-3 py-1.5 rounded-md text-xs font-medium bg-gray-600 text-white shadow-sm">Population</button>
-                    <button data-base="plants"
-                        class="px-3 py-1.5 rounded-md text-xs font-medium text-gray-400 hover:text-white">Power
+                        class="px-3 py-1.5 rounded-md text-xs font-medium bg-gray-600 text-white shadow-sm text-center">Population</button>
+                    <button data-base="electricity"
+                        class="px-3 py-1.5 rounded-md text-xs font-medium text-gray-400 hover:text-white text-center">Electricity
                         Demand</button>
+                    <button data-base="plants"
+                        class="px-3 py-1.5 rounded-md text-xs font-medium text-gray-400 hover:text-white text-center">Capacity
+                        to Displace</button>
                 </div>
-                <p id="population-demand-description" class="hidden text-[10px] text-gray-500 leading-tight">
-                    Can be indexed by existing and announced generation capacity. Installed capacity reflects today’s
-                    demand;
-                    announced capacity indicates where demand is expected to grow.
+                <p id="population-demand-description" class="hidden text-xs text-slate-400 mt-2 italic px-1">
+
                 </p>
             </div>
 
@@ -335,13 +336,15 @@
 
             <div class="space-y-3">
                 <label class="text-xs font-medium text-gray-400 uppercase tracking-wider">Supply Layer</label>
-                <div id="population-overlay-mode" class="grid grid-cols-3 bg-surface-variant rounded-lg p-1">
+                <div id="population-overlay-mode" class="grid grid-cols-1 gap-1 bg-surface-variant rounded-lg p-1">
                     <button data-overlay="none"
-                        class="px-2 py-1.5 rounded-md text-xs font-medium bg-gray-600 text-white shadow-sm">None</button>
+                        class="px-3 py-1.5 rounded-md text-xs font-medium bg-gray-600 text-white shadow-sm text-center">None</button>
                     <button data-overlay="cf"
-                        class="px-2 py-1.5 rounded-md text-xs font-medium text-gray-400 hover:text-white">CF</button>
+                        class="px-3 py-1.5 rounded-md text-xs font-medium text-gray-400 hover:text-white text-center">Capacity
+                        Factor</button>
                     <button data-overlay="lcoe"
-                        class="px-2 py-1.5 rounded-md text-xs font-medium text-gray-400 hover:text-white">LCOE</button>
+                        class="px-3 py-1.5 rounded-md text-xs font-medium text-gray-400 hover:text-white text-center">Levelized
+                        Cost of Energy</button>
                 </div>
             </div>
 
@@ -519,6 +522,18 @@
             </div>
         </div>
 
+        <!-- Electricity Demand Legend -->
+        <div id="legend-electricity"
+            class="hidden pointer-events-auto bg-surface/90 backdrop-blur-md border border-white/10 rounded-xl shadow-xl p-4 w-64">
+            <div class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-2">Electricity Demand (TWh/yr)
+            </div>
+            <div class="w-full h-2 rounded-full mb-2 legend-gradient-pop"></div>
+            <div class="flex justify-between text-[10px] font-mono text-gray-500">
+                <span id="legend-elec-min">0</span>
+                <span id="legend-elec-max">--</span>
+            </div>
+        </div>
+
     </div>
 
 
@@ -579,7 +594,7 @@
         class="hidden absolute inset-0 z-10 bg-black/95 overflow-y-auto pt-24 pb-10 pr-4 sm:pr-10 pl-96">
         <div class="max-w-6xl mx-auto space-y-6">
             <div class="flex justify-between items-center">
-                <h2 class="text-xl font-semibold text-white">Population Analysis</h2>
+                <h2 id="charts-main-heading" class="text-xl font-semibold text-white">Population Analysis</h2>
                 <button id="close-charts" class="text-primary hover:text-white text-sm font-medium">Back to Map</button>
             </div>
 

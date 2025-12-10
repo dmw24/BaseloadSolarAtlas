@@ -502,7 +502,7 @@ function roundedKey(lat, lon, decimals = 4) {
     return `${lat.toFixed(decimals)},${lon.toFixed(decimals)}`;
 }
 
-export function updatePopulationSimple(popData, { baseLayer = 'population', overlayMode = 'none', cfData = [], lcoeData = [], lcoeColorInfo = null, targetCf = null, comparisonMetric = 'lcoe', fossilPlants = [], fossilCapacityMap = null, selectedFuels = ALL_FOSSIL_FUELS, selectedStatus = 'announced' } = {}) {
+export function updatePopulationSimple(popData, { baseLayer = 'population', overlayMode = 'none', cfData = [], lcoeData = [], lcoeColorInfo = null, targetCf = null, comparisonMetric = 'lcoe', fossilPlants = [], fossilCapacityMap = null, electricityDemandData = [], electricityDemandMap = null, selectedFuels = [], selectedStatus = 'announced' } = {}) {
     currentMode = 'population';
     lastPopulationData = popData;
     selectedMarker = null;
@@ -514,6 +514,8 @@ export function updatePopulationSimple(popData, { baseLayer = 'population', over
     if (!popData || popData.length === 0) return;
 
     const capacityMap = fossilCapacityMap instanceof Map ? fossilCapacityMap : null;
+    const demandMap = electricityDemandMap instanceof Map ? electricityDemandMap : null;
+
     const formatCapacityLines = (cap) => {
         if (!cap || !selectedFuelSet.size) {
             return baseLayer === 'plants' ? '<div class="mt-1 text-slate-500">No installed capacity for the selected fuels.</div>' : '';
@@ -531,12 +533,34 @@ export function updatePopulationSimple(popData, { baseLayer = 'population', over
         return `<div class="mt-1 text-slate-500">Installed capacity<br>${lines.join('')}</div>`;
     };
 
-    const selectedFuelSet = new Set((selectedFuels && selectedFuels.length ? selectedFuels : ALL_FOSSIL_FUELS).map(f => f.toLowerCase()));
+    const selectedFuelSet = new Set((selectedFuels && selectedFuels.length ? selectedFuels : []).map(f => f.toLowerCase()));
     const popValues = popData.map(p => p.population_2020 || 0);
-    const scale = buildPopulationScale(popValues);
+    const popScale = buildPopulationScale(popValues);
+
+    // Electricity scale (log scale, black to white like population)
+    let demandScale = null;
+    if (baseLayer === 'electricity' && electricityDemandData && electricityDemandData.length > 0) {
+        const demands = electricityDemandData.map(d => d.annual_demand_kwh || 0).filter(v => v > 0);
+        if (demands.length > 0) {
+            const minD = d3.min(demands);
+            const maxD = d3.max(demands);
+            // Use same scale as population: interpolateGreys inverted (black = low, white = high)
+            demandScale = d3.scaleSequentialLog(t => d3.interpolateGreys(1 - t)).domain([minD, maxD]);
+        }
+    }
+
     const cfByCoord = new Map(cfData.map(d => [roundedKey(d.latitude, d.longitude), d]));
     const lcoeByCoord = new Map(lcoeData.map(d => [roundedKey(d.latitude, d.longitude), d]));
     const lcoeScale = overlayMode === 'lcoe' && lcoeColorInfo ? buildLcoeColorScaleFromInfo(lcoeColorInfo) : null;
+
+    // Build coordinate-based lookup for electricity demand (since popData doesn't have location_id)
+    const demandByCoord = new Map();
+    if (electricityDemandData && electricityDemandData.length > 0) {
+        electricityDemandData.forEach(d => {
+            const key = roundedKey(d.latitude, d.longitude);
+            demandByCoord.set(key, d);
+        });
+    }
 
     const sharedPopup = L.popup({
         closeButton: false,
@@ -545,7 +569,33 @@ export function updatePopulationSimple(popData, { baseLayer = 'population', over
     });
 
     popData.forEach(d => {
-        const popColor = scale(d.population_2020 || 0);
+        let baseColor = 'rgba(0,0,0,0)';
+        let displayPop = true; // default true for population dots
+
+        // Handle Base Layer Color
+        if (baseLayer === 'electricity') {
+            const demandRow = demandMap && d.location_id != null ? demandMap.get(Number(d.location_id)) : null;
+            const val = demandRow ? (demandRow.annual_demand_kwh || 0) : 0;
+            if (val > 0 && demandScale) {
+                baseColor = demandScale(val);
+                displayPop = false; // We use voronoi fill for electricity, not dots (or maybe dots?)
+            } else {
+                baseColor = '#1e293b'; // slate-800 for no data
+                displayPop = false;
+            }
+        } else if (baseLayer === 'plants') {
+            // ... existing plant logic handled via dots but we might change visual strategy ...
+            // Actually, plant view currently just hides population dots and shows plant voronoi?
+            // Let's stick to existing logic:
+            // popColor is used for dots.
+            displayPop = true;
+            // But existing code uses `scale(d.population)`
+            baseColor = popScale(d.population_2020 || 0);
+        } else {
+            // population
+            baseColor = popScale(d.population_2020 || 0);
+        }
+
         const key = roundedKey(d.latitude, d.longitude);
         const cfRow = cfByCoord.get(key);
         const lcoeRow = lcoeByCoord.get(key);
@@ -563,12 +613,16 @@ export function updatePopulationSimple(popData, { baseLayer = 'population', over
             overlayData = lcoeRow;
         }
 
-        const showPopulationDots = baseLayer === 'population' && overlayMode === 'none';
-        if (showPopulationDots) {
-            L.circleMarker([d.latitude, d.longitude], {
+        // Dots logic replaced by Voronoi fill for cleaner look in population/electricity mode
+        // Only render dots if specifically needed (e.g. maybe for plant mode?)
+        // For now, removing dot rendering for base layers to rely on Voronoi.
+        /*
+        const showDots = (baseLayer === 'population' || baseLayer === 'plants') && overlayMode === 'none';
+        if (showDots) {
+             L.circleMarker([d.latitude, d.longitude], {
                 radius: 0.8,
-                fillColor: popColor,
-                color: popColor,
+                fillColor: baseColor,
+                color: baseColor,
                 weight: 0,
                 opacity: 1,
                 fillOpacity: 0.9,
@@ -576,12 +630,20 @@ export function updatePopulationSimple(popData, { baseLayer = 'population', over
                 interactive: false
             }).addTo(markersLayer);
         }
-        // No dots for CF or LCOE overlays - only Voronoi cells
+        */
+
+        // key is already defined above at line 598
+        const demandRow = demandByCoord.get(key);
+        const demandVal = demandRow ? (demandRow.annual_demand_kwh || 0) : 0;
+        const demandTwh = demandVal / 1e9; // Convert kWh to TWh
 
         const populationLine = baseLayer === 'population'
             ? `<div class="mt-1 text-slate-400">Population: ${formatNumber(d.population_2020 || 0, 0)}</div>`
-            : '';
-        const shouldShowHitMarker = baseLayer === 'population' || overlayMode !== 'none';
+            : baseLayer === 'electricity'
+                ? `<div class="mt-1 text-slate-400">Annual Demand: ${demandTwh.toFixed(2)} TWh</div>`
+                : '';
+
+        const shouldShowHitMarker = true; // Always allow hover for tooltip
         if (shouldShowHitMarker) {
             const marker = L.circleMarker([d.latitude, d.longitude], {
                 radius: 4.5,
@@ -661,7 +723,7 @@ export function updatePopulationSimple(popData, { baseLayer = 'population', over
                     population_2020: d.population_2020,
                     targetCf,
                     comparisonMetric
-                }, overlayColor || popColor, overlayMode === 'lcoe' ? 'lcoe' : overlayMode === 'cf' ? 'capacity' : 'population');
+                }, overlayColor || baseColor, overlayMode === 'lcoe' ? 'lcoe' : overlayMode === 'cf' ? 'capacity' : 'population');
 
                 if (map.onLocationSelect) {
                     map.onLocationSelect({ ...d, ...overlayData, population_2020: d.population_2020 }, overlayMode === 'lcoe' ? 'lcoe' : overlayMode === 'cf' ? 'capacity' : 'population');
@@ -711,33 +773,109 @@ export function updatePopulationSimple(popData, { baseLayer = 'population', over
         });
     }
 
-    const mapPoints = popData.map(d => {
+    const voronoiPoints = popData.map(d => {
         const point = map.latLngToLayerPoint([d.latitude, d.longitude]);
         return [point.x, point.y];
     });
 
-    const overlayAccessor = (row) => {
-        const key = roundedKey(row.latitude, row.longitude);
-        if (overlayMode === 'cf') {
-            const cfRow = cfByCoord.get(key);
-            if (cfRow && Number.isFinite(cfRow.annual_cf)) return getColor(cfRow.annual_cf);
-        } else if (overlayMode === 'lcoe' && lcoeScale && lcoeColorInfo) {
-            const lRow = lcoeByCoord.get(key);
-            if (lRow && Number.isFinite(lRow.lcoe)) return getLcoeColor(lRow, lcoeColorInfo, lcoeScale);
-        }
-        return null;
-    };
+    renderVoronoi(voronoiPoints, popData, (d) => {
+        // d is the datum, not index
 
-    const renderBasePolygons = baseLayer === 'population';
-    const renderOverlay = overlayMode !== 'none';
-    if (renderBasePolygons || renderOverlay) {
-        renderVoronoiDual(
-            mapPoints,
-            popData,
-            renderBasePolygons ? (row => scale(row.population_2020 || 0)) : null,
-            renderOverlay ? overlayAccessor : null
-        );
-    }
+        // --- Overlay Logic ---
+        const key = roundedKey(d.latitude, d.longitude);
+        const cfRow = cfByCoord.get(key);
+        const lcoeRow = lcoeByCoord.get(key);
+
+        if (overlayMode === 'cf' && cfRow && Number.isFinite(cfRow.annual_cf)) {
+            return {
+                color: getColor(cfRow.annual_cf),
+                weight: 0,
+                fillColor: getColor(cfRow.annual_cf),
+                fillOpacity: 0.35
+            };
+        } else if (overlayMode === 'lcoe' && lcoeScale && lcoeRow && Number.isFinite(lcoeRow.lcoe)) {
+            const color = getLcoeColor(lcoeRow, lcoeColorInfo, lcoeScale);
+            return {
+                color: color,
+                weight: 0,
+                fillColor: color,
+                fillOpacity: 0.35
+            };
+        }
+
+        // --- Base Layer Logic (when no overlay) ---
+        if (overlayMode === 'none') {
+            if (baseLayer === 'electricity') {
+                const demandRow = demandByCoord.get(key);
+                const val = demandRow ? (demandRow.annual_demand_kwh || 0) : 0;
+                if (val > 0 && demandScale) {
+                    const col = demandScale(val);
+                    return {
+                        color: col,
+                        weight: 0,
+                        fillColor: col,
+                        fillOpacity: 0.7
+                    };
+                }
+            } else if (baseLayer === 'population' || baseLayer === 'plants') {
+                // Population or Plants base layer
+                // We use the scaled population color
+                const popVal = d.population_2020 || 0;
+                const col = popScale(popVal);
+                return {
+                    color: col,
+                    weight: 0,
+                    fillColor: col,
+                    fillOpacity: 0.9
+                };
+            }
+        }
+
+        return {
+            color: 'rgba(0,0,0,0)',
+            weight: 0,
+            fillColor: 'rgba(0,0,0,0)',
+            fillOpacity: 0
+        };
+    }, {
+        onClick: (d) => {
+            const key = roundedKey(d.latitude, d.longitude);
+            const cfRow = cfByCoord.get(key);
+            const lcoeRow = lcoeByCoord.get(key);
+
+            // Reconstruct overlayData/Color for the clicked item
+            let overlayData = null;
+            let overlayColor = null;
+            if (overlayMode === 'cf') overlayData = cfRow;
+            else if (overlayMode === 'lcoe') overlayData = lcoeRow;
+
+            // Base color recreation (for panel header color?)
+            // updateLocationPanel signature: (data, color, mode)
+            // Color is often just used for the stripe.
+            // Let's use generic color or reconstruct logic?
+            // Existing logic was `overlayColor || baseColor`.
+
+            let clickBaseColor = '#ccc';
+            if (baseLayer === 'electricity') {
+                // ... reconstruct if needed, or just pass grey/white
+                // The 'baseColor' calculation was inside the loop.
+                // We can re-calculate or just pass something generic. The panel handles it.
+                clickBaseColor = '#fbbf24'; // generic default
+            }
+
+            updateLocationPanel({
+                ...d,
+                ...(overlayData || {}),
+                population_2020: d.population_2020,
+                targetCf,
+                comparisonMetric
+            }, clickBaseColor, overlayMode === 'lcoe' ? 'lcoe' : overlayMode === 'cf' ? 'capacity' : 'population');
+
+            if (map.onLocationSelect) {
+                map.onLocationSelect({ ...d, ...(overlayData || {}), population_2020: d.population_2020 }, overlayMode === 'lcoe' ? 'lcoe' : overlayMode === 'cf' ? 'capacity' : 'population');
+            }
+        }
+    });
 }
 
 function renderVoronoiDual(mapPoints, data, baseFill, overlayFill) {
@@ -1235,12 +1373,30 @@ function renderVoronoi(mapPoints, data, fillAccessor, options = {}) {
         .enter()
         .append("path")
         .attr("d", (_, i) => voronoi.renderCell(i))
-        .attr("fill", d => fillAccessor ? fillAccessor(d) : getColor(d.annual_cf))
-        .attr("fill-opacity", 0.6)
-        .attr("stroke", "rgba(255,255,255,0.08)")
-        .attr("stroke-width", 0.5)
+        .each(function (d) {
+            const el = d3.select(this);
+            const style = fillAccessor ? fillAccessor(d) : null;
+            if (style && typeof style === 'object') {
+                el.attr("fill", style.fillColor || style.color)
+                    .attr("fill-opacity", Number.isFinite(style.fillOpacity) ? style.fillOpacity : 0.6)
+                    .attr("stroke", style.color || "rgba(255,255,255,0.08)")
+                    .attr("stroke-width", Number.isFinite(style.weight) ? style.weight : 0.5);
+            } else {
+                el.attr("fill", style || getColor(d.annual_cf))
+                    .attr("fill-opacity", 0.6)
+                    .attr("stroke", "rgba(255,255,255,0.08)")
+                    .attr("stroke-width", 0.5);
+            }
+        })
         .attr("class", "transition-color")
         .style("pointer-events", "all")
+        .on("click", (e, d) => {
+            if (options.onClick) {
+                options.onClick(d);
+            } else {
+                // Default behavior if any?
+            }
+        })
         .on("mouseover", (e, d) => {
             if (!enableHoverSelect) return;
             markersLayer.eachLayer(layer => {

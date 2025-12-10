@@ -1,4 +1,4 @@
-import { loadSummary, loadPopulationCsv, loadGemPlantsCsv, loadVoronoiGemCapacityCsv } from './data.js';
+import { loadSummary, loadPopulationCsv, loadGemPlantsCsv, loadVoronoiGemCapacityCsv, loadElectricityDemandData } from './data.js';
 import { initMap, updateMap, updateLcoeMap, updateCfMap, updatePopulationSimple } from './map.js';
 import { initSampleDays, loadSampleWeekData, cleanupSampleDays } from './samples.js';
 
@@ -17,6 +17,8 @@ let populationCoordIndex = new Map();
 let fossilPlants = [];
 let fossilCapacity = [];
 let fossilCapacityMap = new Map();
+let electricityDemandData = [];
+let electricityDemandMap = new Map();
 const BASE_LOAD_MW = 1000; // assume baseload of 1 GW for CF outputs
 const ALL_FUELS = ['coal', 'oil_gas', 'bioenergy', 'nuclear'];
 const TX_WACC = 0.06;
@@ -515,8 +517,10 @@ function showMapContainerOnly() {
 function showPopulationChartsOnly() {
     if (mapContainer) mapContainer.classList.add('hidden');
     if (populationChartsContainer) populationChartsContainer.classList.remove('hidden');
-    // Hide legend when showing charts
+    // Hide all legends when showing charts
     if (legendPopulation) legendPopulation.classList.add('hidden');
+    const legendElectricity = document.getElementById('legend-electricity');
+    if (legendElectricity) legendElectricity.classList.add('hidden');
 }
 
 function setLocationPanelChartSummary() {
@@ -589,7 +593,8 @@ function updatePopulationBaseToggleUI() {
     }
     const demandDescription = document.getElementById('population-demand-description');
     if (demandDescription) {
-        demandDescription.classList.toggle('hidden', !showPlantControls);
+        // Show demand description only when 'Power Demand' (plants) is selected
+        demandDescription.classList.toggle('hidden', populationBaseLayer !== 'plants');
     }
 
     // Update chart titles based on base layer
@@ -685,7 +690,8 @@ function setPopulationChartMetric(mode) {
 }
 
 function setPopulationBaseLayer(mode) {
-    const normalized = mode === 'plants' ? 'plants' : 'population';
+    const validModes = new Set(['population', 'plants', 'electricity']);
+    const normalized = validModes.has(mode) ? mode : 'population';
     populationBaseLayer = normalized;
     updatePopulationBaseToggleUI();
     updateChartLayerToggleUI();
@@ -732,30 +738,51 @@ function moveLcoeControlsToOriginalPosition() {
     }
 }
 
-function updatePopulationLegend(popData, overlayMode = 'none') {
-    if (!legendPopulation || !legendPopMin || !legendPopMax) return;
-    if (!popData || popData.length === 0) {
-        legendPopulation.classList.add('hidden');
-        return;
-    }
-    const vals = popData.map(p => p.population_2020 || 0).filter(Number.isFinite);
-    const max = Math.max(...vals, 0);
-    legendPopMin.textContent = '0';
-    legendPopMax.textContent = max ? formatNumber(max, 0) : '--';
-    legendPopulation.classList.remove('hidden');
-    if (legendPopLayerNote) {
-        if (overlayMode === 'cf') {
-            legendPopLayerNote.textContent = 'Color: capacity factor map for the current solar + storage build.';
-            legendPopLayerNote.classList.remove('text-slate-500');
-            legendPopLayerNote.classList.add('text-slate-300');
-        } else if (overlayMode === 'lcoe') {
-            legendPopLayerNote.textContent = 'Color: LCOE for each viable cell.';
-            legendPopLayerNote.classList.remove('text-slate-500');
-            legendPopLayerNote.classList.add('text-slate-300');
-        } else {
-            legendPopLayerNote.textContent = 'Color: population shading only (no additional metric selected).';
-            legendPopLayerNote.classList.remove('text-slate-300');
-            legendPopLayerNote.classList.add('text-slate-500');
+function updatePopulationLegend(popData, overlayMode = 'none', baseLayer = 'population') {
+    const legendElectricity = document.getElementById('legend-electricity');
+    const legendElecMin = document.getElementById('legend-elec-min');
+    const legendElecMax = document.getElementById('legend-elec-max');
+
+    // Hide both by default
+    if (legendPopulation) legendPopulation.classList.add('hidden');
+    if (legendElectricity) legendElectricity.classList.add('hidden');
+
+    if (baseLayer === 'electricity') {
+        // Show electricity legend
+        if (!legendElectricity) return;
+        if (electricityDemandData && electricityDemandData.length > 0) {
+            const vals = electricityDemandData.map(d => d.annual_demand_kwh || 0).filter(v => v > 0);
+            const maxKwh = Math.max(...vals, 0);
+            const maxTwh = maxKwh / 1e9; // Convert to TWh
+            if (legendElecMin) legendElecMin.textContent = '0';
+            if (legendElecMax) legendElecMax.textContent = maxTwh > 0 ? maxTwh.toFixed(1) + ' TWh' : '--';
+        }
+        legendElectricity.classList.remove('hidden');
+    } else {
+        // Show population legend
+        if (!legendPopulation || !legendPopMin || !legendPopMax) return;
+        if (!popData || popData.length === 0) {
+            return;
+        }
+        const vals = popData.map(p => p.population_2020 || 0).filter(Number.isFinite);
+        const max = Math.max(...vals, 0);
+        legendPopMin.textContent = '0';
+        legendPopMax.textContent = max ? formatNumber(max, 0) : '--';
+        legendPopulation.classList.remove('hidden');
+        if (legendPopLayerNote) {
+            if (overlayMode === 'cf') {
+                legendPopLayerNote.textContent = 'Color: capacity factor map for the current solar + storage build.';
+                legendPopLayerNote.classList.remove('text-slate-500');
+                legendPopLayerNote.classList.add('text-slate-300');
+            } else if (overlayMode === 'lcoe') {
+                legendPopLayerNote.textContent = 'Color: LCOE for each viable cell.';
+                legendPopLayerNote.classList.remove('text-slate-500');
+                legendPopLayerNote.classList.add('text-slate-300');
+            } else {
+                legendPopLayerNote.textContent = 'Color: population shading only (no additional metric selected).';
+                legendPopLayerNote.classList.remove('text-slate-300');
+                legendPopLayerNote.classList.add('text-slate-500');
+            }
         }
     }
 }
@@ -1274,7 +1301,19 @@ function renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels
     const isLcoe = overlayMode === 'lcoe';
     const fuelSet = selectedFuels instanceof Set ? selectedFuels : (selectedFuels ? new Set(selectedFuels) : new Set(ALL_FUELS));
     const fuelDescriptor = describeFuelSelection(fuelSet);
-    const weightDescriptor = baseLayer === 'plants' ? 'Displaceable Plant capacity' : 'population';
+
+    // Determine weight descriptor based on baseLayer
+    let weightDescriptor, weightUnit;
+    if (baseLayer === 'plants') {
+        weightDescriptor = 'Displaceable Plant capacity';
+        weightUnit = 'Capacity (MW)';
+    } else if (baseLayer === 'electricity') {
+        weightDescriptor = 'electricity demand';
+        weightUnit = 'Electricity Demand (TWh)';
+    } else {
+        weightDescriptor = 'population';
+        weightUnit = 'Population (people)';
+    }
 
     // Check if we should stack (Plants + Overlay)
     const isStacked = baseLayer === 'plants' && (isCf || isLcoe);
@@ -1286,22 +1325,56 @@ function renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels
 
     if (isCf) {
         xAxisLabel = 'Capacity Factor (%)';
-        yAxisLabel = weightDescriptor === 'population' ? 'Population (people)' : 'Capacity (MW)';
+        yAxisLabel = weightUnit;
         scatterXAxisLabel = 'Capacity Factor (%)';
         histogramMainTitle = 'Distribution by Capacity Factor';
-        histogramHelperText = `Shows total ${weightDescriptor === 'population' ? 'population' : 'capacity'} as a function of Capacity Factor`;
+        histogramHelperText = `Shows total ${weightDescriptor} as a function of Capacity Factor`;
     } else if (isLcoe) {
         xAxisLabel = 'LCOE ($/MWh)';
-        yAxisLabel = weightDescriptor === 'population' ? 'Population (people)' : 'Capacity (MW)';
+        yAxisLabel = weightUnit;
         scatterXAxisLabel = 'LCOE ($/MWh)';
         histogramMainTitle = 'Distribution by LCOE';
-        histogramHelperText = `Shows total ${weightDescriptor === 'population' ? 'population' : 'capacity'} as a function of LCOE`;
+        histogramHelperText = `Shows total ${weightDescriptor} as a function of LCOE`;
     } else {
         xAxisLabel = `Cumulative global ${weightDescriptor} (%)`;
-        yAxisLabel = 'Capacity (MW)'; // Or Population
-        scatterXAxisLabel = 'Metric';
-        histogramMainTitle = 'Metric by percentile';
-        histogramHelperText = `Shows metric across ${weightDescriptor} percentiles`;
+        yAxisLabel = baseLayer === 'electricity' ? 'Electricity Demand (TWh)' : 'Metric';
+        scatterXAxisLabel = baseLayer === 'electricity' ? 'Electricity Demand (TWh)' : 'Metric';
+        histogramMainTitle = baseLayer === 'electricity' ? 'Electricity Demand Distribution' : 'Metric by percentile';
+        histogramHelperText = `Shows ${baseLayer === 'electricity' ? 'electricity demand' : 'metric'} across ${weightDescriptor} percentiles`;
+    }
+
+    // Update main page heading based on baseLayer
+    const chartsMainHeading = document.getElementById('charts-main-heading');
+    if (chartsMainHeading) {
+        if (baseLayer === 'electricity') {
+            chartsMainHeading.textContent = 'Electricity Demand Analysis';
+        } else if (baseLayer === 'plants') {
+            chartsMainHeading.textContent = 'Capacity to Displace Analysis';
+        } else {
+            chartsMainHeading.textContent = 'Population Analysis';
+        }
+    }
+
+    // Update chart title elements
+    const chartTitlePercentile = document.getElementById('chart-title-percentile');
+    const chartTitleDistribution = document.getElementById('chart-title-distribution');
+    if (chartTitlePercentile) {
+        if (baseLayer === 'electricity') {
+            chartTitlePercentile.textContent = isCf ? 'Electricity Demand by CF' : isLcoe ? 'Electricity Demand by LCOE' : 'Electricity Demand by Percentile';
+        } else if (baseLayer === 'plants') {
+            chartTitlePercentile.textContent = isCf ? 'Capacity by CF' : isLcoe ? 'Capacity by LCOE' : 'Metric by Capacity Percentile';
+        } else {
+            chartTitlePercentile.textContent = isCf ? 'Population by CF' : isLcoe ? 'Population by LCOE' : 'Metric by Population Percentile';
+        }
+    }
+    if (chartTitleDistribution) {
+        if (baseLayer === 'electricity') {
+            chartTitleDistribution.textContent = 'Electricity Demand Distribution';
+        } else if (baseLayer === 'plants') {
+            chartTitleDistribution.textContent = 'Capacity Distribution';
+        } else {
+            chartTitleDistribution.textContent = 'Population Distribution';
+        }
     }
 
     let histogramTooltip;
@@ -1338,10 +1411,20 @@ function renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels
             chartData = chartData.map(v => { sum += v; return sum; });
         }
 
+        // Determine dataset label based on baseLayer
+        let datasetLabel;
+        if (baseLayer === 'electricity') {
+            datasetLabel = 'Electricity Demand';
+        } else if (baseLayer === 'plants') {
+            datasetLabel = 'Capacity';
+        } else {
+            datasetLabel = 'Population';
+        }
+
         histogramData = {
             labels: hist.labels,
             datasets: [{
-                label: weightDescriptor === 'population' ? 'Population' : 'Capacity',
+                label: datasetLabel,
                 data: chartData,
                 backgroundColor: isCf ? '#fbbf24' : '#10b981',
                 borderColor: isCf ? '#f59e0b' : '#059669',
@@ -1350,7 +1433,13 @@ function renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels
         };
         histogramTooltip = (ctx) => {
             const val = ctx.parsed.y;
-            return `${ctx.dataset.label}: ${val.toLocaleString()}`;
+            if (baseLayer === 'electricity') {
+                return `${ctx.dataset.label}: ${val.toFixed(2)} TWh`;
+            } else if (baseLayer === 'plants') {
+                return `${ctx.dataset.label}: ${val.toLocaleString()} MW`;
+            } else {
+                return `${ctx.dataset.label}: ${val.toLocaleString()}`;
+            }
         };
     }
 
@@ -1585,6 +1674,15 @@ function updatePopulationView() {
             metrics = buildPopulationMetrics(populationData, overlayMode, cfData, lcoeData);
         } else if (populationBaseLayer === 'plants') {
             metrics = buildPlantMetrics(fossilCapacity, overlayMode, cfData, lcoeData, populationFuelFilter, plantStatusFilter);
+        } else if (populationBaseLayer === 'electricity') {
+            // Re-use population metrics builder but with electricity data (structure is similar enough for simple charts, 
+            // or we might need a dedicated builder if specific handling is needed. 
+            // The charts likely expect 'pop' field. We can map annual_demand_kwh to pop or write a custom builder.
+            // Let's use a custom builder or modify buildPopulationMetrics to accept value accessor.
+            // For now, let's assume we can adapt buildPopulationMetrics or create buildElectricityMetrics.
+            // Let's defer chart implementation slightly or use a placeholder.
+            // Actually, let's create a builder helper for electricity.
+            metrics = buildElectricityMetrics(electricityDemandData, overlayMode, cfData, lcoeData);
         }
 
         renderPopulationCharts(metrics, {
@@ -1605,11 +1703,13 @@ function updatePopulationView() {
             targetCf: lcoeParams.targetCf,
             fossilPlants,
             fossilCapacityMap,
+            electricityDemandData,
+            electricityDemandMap,
             selectedFuels: Array.from(populationFuelFilter),
             selectedStatus: plantStatusFilter
         });
 
-        updatePopulationLegend(populationData, overlayMode);
+        updatePopulationLegend(populationData, overlayMode, populationBaseLayer);
     }
 }
 
@@ -1691,6 +1791,7 @@ async function init() {
             populationCoordIndex = new Map();
         }
         try {
+            loadingStatus.textContent = "Loading power plant data...";
             fossilPlants = await loadGemPlantsCsv();
         } catch (err) {
             console.error("GEM plant data load failed:", err);
@@ -1703,6 +1804,15 @@ async function init() {
             console.error("GEM capacity CSV load failed:", err);
             fossilCapacity = [];
             fossilCapacityMap = new Map();
+        }
+        try {
+            loadingStatus.textContent = "Loading electricity demand data...";
+            electricityDemandData = await loadElectricityDemandData();
+            electricityDemandMap = new Map(electricityDemandData.map(row => [row.location_id, row]));
+        } catch (err) {
+            console.error("Electricity demand data load failed:", err);
+            electricityDemandData = [];
+            electricityDemandMap = new Map();
         }
 
         loadingStatus.textContent = "Processing...";
@@ -1868,6 +1978,37 @@ function initUIEvents() {
             queueLcoeUpdate();
         });
     }
+
+    // Population LCOE parameter inputs
+    const popSolarCapexInput = document.getElementById('pop-solar-capex');
+    const popBatteryCapexInput = document.getElementById('pop-battery-capex');
+    const popSolarOpexInput = document.getElementById('pop-solar-opex');
+    const popBatteryOpexInput = document.getElementById('pop-battery-opex');
+    const popSolarLifeInput = document.getElementById('pop-solar-life');
+    const popBatteryLifeInput = document.getElementById('pop-battery-life');
+    const popWaccInput = document.getElementById('pop-wacc');
+
+    const updatePopLcoeParams = () => {
+        lcoeParams.solarCapex = parseFloat(popSolarCapexInput?.value) || 600;
+        lcoeParams.batteryCapex = parseFloat(popBatteryCapexInput?.value) || 120;
+        lcoeParams.solarOpex = parseFloat(popSolarOpexInput?.value) / 100 || 0.015;
+        lcoeParams.batteryOpex = parseFloat(popBatteryOpexInput?.value) / 100 || 0.02;
+        lcoeParams.solarLife = parseInt(popSolarLifeInput?.value, 10) || 30;
+        lcoeParams.batteryLife = parseInt(popBatteryLifeInput?.value, 10) || 20;
+        lcoeParams.wacc = parseFloat(popWaccInput?.value) / 100 || 0.07;
+
+        // Recalculate if we're in population view with LCOE overlay
+        if (currentViewMode === 'population' && populationOverlayMode === 'lcoe') {
+            updatePopulationView();
+        }
+    };
+
+    [popSolarCapexInput, popBatteryCapexInput, popSolarOpexInput, popBatteryOpexInput,
+        popSolarLifeInput, popBatteryLifeInput, popWaccInput].forEach(input => {
+            if (input) {
+                input.addEventListener('change', updatePopLcoeParams);
+            }
+        });
 
     populationDisplayButtons.forEach(btn => {
         btn.addEventListener('click', () => {
@@ -2105,3 +2246,55 @@ function updateModel() {
 
 // Start
 init();
+
+function buildElectricityMetrics(demandData, overlayMode, cfData, lcoeData) {
+    // Similar to population metrics but uses demandData (annual_demand_kwh) as weight
+    const metrics = [];
+
+    // Coordinate-based lookups (like map.js uses)
+    const roundedKey = (lat, lon) => `${lat.toFixed(2)},${lon.toFixed(2)}`;
+    const cfByCoord = new Map();
+    if (cfData) cfData.forEach(d => cfByCoord.set(roundedKey(d.latitude, d.longitude), d));
+    const lcoeByCoord = new Map();
+    if (lcoeData) lcoeData.forEach(d => lcoeByCoord.set(roundedKey(d.latitude, d.longitude), d));
+
+    demandData.forEach(d => {
+        if (!d.annual_demand_kwh || d.annual_demand_kwh <= 0) return;
+
+        const key = roundedKey(d.latitude, d.longitude);
+        const cfRow = cfByCoord.get(key);
+        const lcoeRow = lcoeByCoord.get(key);
+
+        let metricVal = null;
+        let meetsTarget = false;
+
+        if (overlayMode === 'cf' && cfRow) {
+            metricVal = cfRow.annual_cf;
+            meetsTarget = true;
+        } else if (overlayMode === 'lcoe' && lcoeRow) {
+            if (lcoeRow.meetsTarget) {
+                metricVal = lcoeRow.lcoe;
+                meetsTarget = true;
+            }
+        } else if (overlayMode === 'none') {
+            // When no overlay, use demand itself as the "metric" for charting distribution
+            // Convert to TWh for display consistency
+            metricVal = d.annual_demand_kwh / 1e9; // TWh
+            meetsTarget = true;
+        }
+
+        if (metricVal !== null) {
+            metrics.push({
+                location_id: d.location_id,
+                latitude: d.latitude,
+                longitude: d.longitude,
+                pop: d.annual_demand_kwh, // Original kWh for weighting
+                weight: d.annual_demand_kwh / 1e9, // TWh for histogram weighting
+                metric: metricVal,
+                meetsTarget
+            });
+        }
+    });
+
+    return metrics;
+}

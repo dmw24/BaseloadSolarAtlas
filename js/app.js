@@ -6,6 +6,12 @@ import {
     initSubsetMap, renderSubsetMap, subsetMap
 } from './map.js';
 import { initSampleDays, loadSampleWeekData, cleanupSampleDays } from './samples.js';
+import {
+    capitalizeWord, formatNumber, formatCurrency, coordKey, roundedKey,
+    haversineKm, updateToggleUI, capitalRecoveryFactor as crf
+} from './utils.js';
+import { ALL_FUELS, FUEL_COLORS, TX_WACC, TX_LIFE, BASE_LOAD_MW, LCOE_NO_DATA_COLOR, VIEW_MODE_EXPLANATIONS, CF_COLOR_SCALE } from './constants.js';
+import { createSharedPopup, buildPlantTooltip } from './tooltip.js';
 
 const d3 = window.d3;
 
@@ -26,10 +32,7 @@ let fossilCapacity = [];
 let fossilCapacityMap = new Map();
 let electricityDemandData = [];
 let electricityDemandMap = new Map();
-const BASE_LOAD_MW = 1000; // assume baseload of 1 GW for CF outputs
-const ALL_FUELS = ['coal', 'oil_gas', 'bioenergy', 'nuclear'];
-const TX_WACC = 0.06;
-const TX_LIFE = 50;
+// Note: BASE_LOAD_MW, ALL_FUELS, TX_WACC, TX_LIFE now imported from constants.js
 let lcoeDisplayMode = 'delta'; // 'delta' or 'transmission'
 let populationChartCumulative = false;
 let lcoeTargetMode = 'utilization'; // 'utilization' or 'lcoe'
@@ -180,14 +183,7 @@ if (lcoeDisplayModeButtons && lcoeDisplayModeButtons.length > 0) {
         });
     });
 }
-const TX_CRF = (() => {
-    // capitalRecoveryFactor is hoisted, so safe to call later
-    try {
-        return capitalRecoveryFactor ? capitalRecoveryFactor(TX_WACC, TX_LIFE) : 0;
-    } catch {
-        return 0;
-    }
-})();
+const TX_CRF = crf(TX_WACC, TX_LIFE);
 let lcoeParams = {
     solarCapex: 600,       // $/kW_DC
     batteryCapex: 120,     // $/kWh
@@ -205,12 +201,7 @@ const DELTA_PERCENTILE = 0.95;
 let legendLock = false;
 let lockedColorInfo = null;
 let lastColorInfo = null;
-const VIEW_MODE_EXPLANATIONS = {
-    capacity: 'Capacity Factor Map shows what share of the year a given solar + storage build can sustain a 1\u00a0MW baseload.',
-    samples: 'Hourly Profile Samples replay a representative 168-hour week so you can examine solar output, storage dispatch, and any unmet 1\u00a0MW demand.',
-    lcoe: 'LCOE Map compares the levelized cost ($/MWh) of every location that can meet the target capacity factor.',
-    population: 'Supply-Demand Matching links where people live (population density as a proxy for demand) with the CF or LCOE of each location.'
-};
+// Note: VIEW_MODE_EXPLANATIONS now imported from constants.js
 
 // DOM Elements
 // DOM Elements
@@ -244,7 +235,7 @@ const comparisonToggle = document.getElementById('comparison-toggle');
 const clearRefBtn = document.getElementById('lcoe-clear-ref');
 const legendLcoeNoData = document.getElementById('legend-lcoe-nodata');
 const legendTxExplainer = document.getElementById('legend-tx-explainer');
-const LCOE_NO_DATA_COLOR = '#611010'; // Deep red for missing data
+// Note: LCOE_NO_DATA_COLOR imported from constants.js
 
 // Settings Modal Elements
 const targetCfSlider = document.getElementById('target-cf-slider');
@@ -364,34 +355,14 @@ function buildCoordIndex(data) {
     return index;
 }
 
-function capitalizeWord(str = '') {
-    if (!str) return '';
-    return str.charAt(0).toUpperCase() + str.slice(1);
-}
-
 function describeFuelSelection(set) {
     if (!set || set.size === 0 || set.size === ALL_FUELS.length) return 'fossil';
     if (set.size === 1) return Array.from(set)[0];
     return 'selected fossil';
 }
 
+// Note: capitalizeWord, haversineKm, coordKey, formatNumber, formatCurrency imported from utils.js
 // capitalRecoveryFactor is imported from map.js
-
-function haversineKm(lat1, lon1, lat2, lon2) {
-    const toRad = (deg) => deg * Math.PI / 180;
-    const R = 6371; // Earth radius in km
-    const dLat = toRad(lat2 - lat1);
-    const dLon = toRad(lon2 - lon1);
-    const a = Math.sin(dLat / 2) ** 2 +
-        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-        Math.sin(dLon / 2) ** 2;
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-}
-
-function coordKey(lat, lon) {
-    return `${lat.toFixed(6)},${lon.toFixed(6)} `;
-}
 
 function computeConfigLcoe(row, params) {
     const solarKw = row.solar_gw * 1_000_000;      // GW_DC -> kW
@@ -432,14 +403,6 @@ function computeTransmissionMetrics(row, reference, delta) {
         breakevenPerGw,
         breakevenPerGwKm
     };
-}
-
-function formatNumber(value, decimals = 0) {
-    if (!Number.isFinite(value)) return '--';
-    return value.toLocaleString('en-US', {
-        minimumFractionDigits: decimals,
-        maximumFractionDigits: decimals
-    });
 }
 
 function formatCurrencyLabel(value, decimals = 0) {
@@ -667,27 +630,11 @@ function resetLocationPanelAfterChartSummary() {
 }
 
 function updatePopulationDisplayToggleUI() {
-    if (!populationDisplayButtons || populationDisplayButtons.length === 0) return;
-    populationDisplayButtons.forEach(btn => {
-        const isActive = btn.dataset.mode === populationDisplayMode;
-        btn.classList.toggle('bg-gray-600', isActive);
-        btn.classList.toggle('text-white', isActive);
-        btn.classList.toggle('shadow-sm', isActive);
-        btn.classList.toggle('text-gray-400', !isActive);
-        btn.classList.toggle('hover:text-white', !isActive);
-    });
+    updateToggleUI(populationDisplayButtons, populationDisplayMode, 'mode');
 }
 
 function updatePopulationOverlayToggleUI() {
-    if (!populationOverlayButtons || populationOverlayButtons.length === 0) return;
-    populationOverlayButtons.forEach(btn => {
-        const isActive = btn.dataset.overlay === populationOverlayMode;
-        btn.classList.toggle('bg-gray-600', isActive);
-        btn.classList.toggle('text-white', isActive);
-        btn.classList.toggle('shadow-sm', isActive);
-        btn.classList.toggle('text-gray-400', !isActive);
-        btn.classList.toggle('hover:text-white', !isActive);
-    });
+    updateToggleUI(populationOverlayButtons, populationOverlayMode, 'overlay');
 }
 
 function updatePopulationBaseToggleUI() {
@@ -754,19 +701,13 @@ function updatePopulationFuelToggleUI() {
 }
 
 function updatePlantStatusToggleUI() {
-    if (!plantStatusButtons || plantStatusButtons.length === 0) return;
-    plantStatusButtons.forEach(btn => {
-        const isActive = btn.dataset.status === plantStatusFilter;
-        btn.classList.toggle('bg-gray-600', isActive);
-        btn.classList.toggle('text-white', isActive);
-        btn.classList.toggle('shadow-sm', isActive);
-        btn.classList.toggle('text-gray-400', !isActive);
-        btn.classList.toggle('hover:text-white', !isActive);
-    });
+    updateToggleUI(plantStatusButtons, plantStatusFilter, 'status');
 }
 
+// Note: Chart toggle functions use different styling (slate colors) - keeping inline for now
+// to preserve visual distinction from main toggle buttons
 function updateChartMetricToggleUI() {
-    if (!populationChartMetricButtons || populationChartMetricButtons.length === 0) return;
+    if (!populationChartMetricButtons?.length) return;
     populationChartMetricButtons.forEach(btn => {
         const isActive = btn.dataset.metric === populationChartMetric;
         btn.classList.toggle('bg-slate-700', isActive);
@@ -776,7 +717,7 @@ function updateChartMetricToggleUI() {
 }
 
 function updateChartLayerToggleUI() {
-    if (!populationChartLayerButtons || populationChartLayerButtons.length === 0) return;
+    if (!populationChartLayerButtons?.length) return;
     populationChartLayerButtons.forEach(btn => {
         const isActive = btn.dataset.layer === populationBaseLayer;
         btn.classList.toggle('bg-slate-700', isActive);
@@ -786,7 +727,7 @@ function updateChartLayerToggleUI() {
 }
 
 function updateChartOverlayToggleUI() {
-    if (!populationChartOverlayButtons || populationChartOverlayButtons.length === 0) return;
+    if (!populationChartOverlayButtons?.length) return;
     populationChartOverlayButtons.forEach(btn => {
         const isActive = btn.dataset.overlay === populationOverlayMode;
         btn.classList.toggle('bg-slate-700', isActive);
@@ -1199,12 +1140,7 @@ function buildPopulationMetrics(enrichedPop, overlayMode, cfData, lcoeData) {
     }).filter(m => (overlayMode === 'cf' || overlayMode === 'lcoe') ? Number.isFinite(m.metric) : m.weight > 0);
 }
 
-const FUEL_COLORS = {
-    coal: '#f97316',
-    oil_gas: '#38bdf8',
-    bioenergy: '#84cc16',
-    nuclear: '#a855f7'
-};
+// Note: FUEL_COLORS now imported from constants.js
 
 function buildPlantMetrics(capacityRows, overlayMode, cfData, lcoeData, selectedFuels, statusFilter) {
     const cfById = new Map(cfData.map(d => [d.location_id, d]));

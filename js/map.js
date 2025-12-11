@@ -1,3 +1,6 @@
+import { capitalizeWord, formatNumber, formatCurrency, coordKey, roundedKey, capitalRecoveryFactor as crf } from './utils.js';
+import { ALL_FUELS, FUEL_COLORS, CF_COLOR_SCALE } from './constants.js';
+import { createSharedPopup, buildTooltipHtml, buildCfTooltip, buildPlantTooltip } from './tooltip.js';
 
 let map;
 let markersLayer;
@@ -10,31 +13,19 @@ let sampleLocationHandler = null;
 let populationOverlay = false;
 let populationData = null;
 let populationScale = null;
-const ALL_FOSSIL_FUELS = ['coal', 'oil_gas', 'bioenergy', 'nuclear'];
-
-// Helper function
-function capitalizeWord(str = '') {
-    if (!str) return '';
-    return str.charAt(0).toUpperCase() + str.slice(1);
-}
+const ALL_FOSSIL_FUELS = ALL_FUELS;
+const FOSSIL_COLORS = FUEL_COLORS;
 
 // Color scale for Capacity Factor (0.0 to 1.0)
 const colorScale = d3.scaleLinear()
-    .domain([0, 0.05, 0.4, 0.7, 1.0])
-    .range(["#0049ff", "#0049ff", "#00c853", "#ff9800", "#d32f2f"])
+    .domain(CF_COLOR_SCALE.domain)
+    .range(CF_COLOR_SCALE.range)
     .interpolate(d3.interpolateRgb)
     .clamp(true);
 
 function getColor(cf) {
     return colorScale(cf);
 }
-
-const FOSSIL_COLORS = {
-    coal: '#f97316',
-    oil_gas: '#38bdf8',
-    bioenergy: '#84cc16',
-    nuclear: '#a855f7'
-};
 
 function buildPopulationScale(values) {
     const valid = values.filter(Number.isFinite);
@@ -474,33 +465,8 @@ export function updatePopulationPolygons(popData, geojson, { overlayMode = 'none
     }
 }
 
-export function capitalRecoveryFactor(rate, years) {
-    if (years <= 0) return 0;
-    if (rate === 0) return 1 / years;
-    const pow = Math.pow(1 + rate, years);
-    return (rate * pow) / (pow - 1);
-}
-
-function formatNumber(value, decimals = 0) {
-    if (!Number.isFinite(value)) return '--';
-    return value.toLocaleString('en-US', {
-        minimumFractionDigits: decimals,
-        maximumFractionDigits: decimals
-    });
-}
-
-function formatCurrency(value, decimals = 0) {
-    const num = formatNumber(value, decimals);
-    return num === '--' ? '--' : `$${num}`;
-}
-
-function coordKey(lat, lon) {
-    return `${lat.toFixed(6)},${lon.toFixed(6)}`;
-}
-
-function roundedKey(lat, lon, decimals = 4) {
-    return `${lat.toFixed(decimals)},${lon.toFixed(decimals)}`;
-}
+// Re-export capitalRecoveryFactor from utils for backward compatibility
+export { crf as capitalRecoveryFactor };
 
 export function updatePopulationSimple(popData, { baseLayer = 'population', overlayMode = 'none', cfData = [], lcoeData = [], lcoeColorInfo = null, targetCf = null, comparisonMetric = 'lcoe', fossilPlants = [], fossilCapacityMap = null, electricityDemandData = [], electricityDemandMap = null, selectedFuels = [], selectedStatus = 'announced' } = {}) {
     currentMode = 'population';
@@ -778,104 +744,39 @@ export function updatePopulationSimple(popData, { baseLayer = 'population', over
         return [point.x, point.y];
     });
 
-    renderVoronoi(voronoiPoints, popData, (d) => {
-        // d is the datum, not index
+    // Define base layer fill function (demand layer)
+    const baseFill = (d) => {
+        if (baseLayer === 'electricity') {
+            const key = roundedKey(d.latitude, d.longitude);
+            const demandRow = demandByCoord.get(key);
+            const val = demandRow ? (demandRow.annual_demand_kwh || 0) : 0;
+            if (val > 0 && demandScale) {
+                return demandScale(val);
+            }
+            return '#1e293b'; // slate-800 for no data
+        } else if (baseLayer === 'population' || baseLayer === 'plants') {
+            const popVal = d.population_2020 || 0;
+            return popScale(popVal);
+        }
+        return 'rgba(0,0,0,0)';
+    };
 
-        // --- Overlay Logic ---
+    // Define overlay fill function (supply layer)
+    const overlayFill = overlayMode !== 'none' ? (d) => {
         const key = roundedKey(d.latitude, d.longitude);
         const cfRow = cfByCoord.get(key);
         const lcoeRow = lcoeByCoord.get(key);
 
         if (overlayMode === 'cf' && cfRow && Number.isFinite(cfRow.annual_cf)) {
-            return {
-                color: getColor(cfRow.annual_cf),
-                weight: 0,
-                fillColor: getColor(cfRow.annual_cf),
-                fillOpacity: 0.35
-            };
+            return getColor(cfRow.annual_cf);
         } else if (overlayMode === 'lcoe' && lcoeScale && lcoeRow && Number.isFinite(lcoeRow.lcoe)) {
-            const color = getLcoeColor(lcoeRow, lcoeColorInfo, lcoeScale);
-            return {
-                color: color,
-                weight: 0,
-                fillColor: color,
-                fillOpacity: 0.35
-            };
+            return getLcoeColor(lcoeRow, lcoeColorInfo, lcoeScale);
         }
+        return null; // null means no overlay color for this cell
+    } : null;
 
-        // --- Base Layer Logic (when no overlay) ---
-        if (overlayMode === 'none') {
-            if (baseLayer === 'electricity') {
-                const demandRow = demandByCoord.get(key);
-                const val = demandRow ? (demandRow.annual_demand_kwh || 0) : 0;
-                if (val > 0 && demandScale) {
-                    const col = demandScale(val);
-                    return {
-                        color: col,
-                        weight: 0,
-                        fillColor: col,
-                        fillOpacity: 0.7
-                    };
-                }
-            } else if (baseLayer === 'population' || baseLayer === 'plants') {
-                // Population or Plants base layer
-                // We use the scaled population color
-                const popVal = d.population_2020 || 0;
-                const col = popScale(popVal);
-                return {
-                    color: col,
-                    weight: 0,
-                    fillColor: col,
-                    fillOpacity: 0.9
-                };
-            }
-        }
-
-        return {
-            color: 'rgba(0,0,0,0)',
-            weight: 0,
-            fillColor: 'rgba(0,0,0,0)',
-            fillOpacity: 0
-        };
-    }, {
-        onClick: (d) => {
-            const key = roundedKey(d.latitude, d.longitude);
-            const cfRow = cfByCoord.get(key);
-            const lcoeRow = lcoeByCoord.get(key);
-
-            // Reconstruct overlayData/Color for the clicked item
-            let overlayData = null;
-            let overlayColor = null;
-            if (overlayMode === 'cf') overlayData = cfRow;
-            else if (overlayMode === 'lcoe') overlayData = lcoeRow;
-
-            // Base color recreation (for panel header color?)
-            // updateLocationPanel signature: (data, color, mode)
-            // Color is often just used for the stripe.
-            // Let's use generic color or reconstruct logic?
-            // Existing logic was `overlayColor || baseColor`.
-
-            let clickBaseColor = '#ccc';
-            if (baseLayer === 'electricity') {
-                // ... reconstruct if needed, or just pass grey/white
-                // The 'baseColor' calculation was inside the loop.
-                // We can re-calculate or just pass something generic. The panel handles it.
-                clickBaseColor = '#fbbf24'; // generic default
-            }
-
-            updateLocationPanel({
-                ...d,
-                ...(overlayData || {}),
-                population_2020: d.population_2020,
-                targetCf,
-                comparisonMetric
-            }, clickBaseColor, overlayMode === 'lcoe' ? 'lcoe' : overlayMode === 'cf' ? 'capacity' : 'population');
-
-            if (map.onLocationSelect) {
-                map.onLocationSelect({ ...d, ...(overlayData || {}), population_2020: d.population_2020 }, overlayMode === 'lcoe' ? 'lcoe' : overlayMode === 'cf' ? 'capacity' : 'population');
-            }
-        }
-    });
+    // Use dual-layer rendering to show both demand and supply with transparency
+    renderVoronoiDual(voronoiPoints, popData, baseFill, overlayFill);
 }
 
 function renderVoronoiDual(mapPoints, data, baseFill, overlayFill) {
@@ -915,6 +816,10 @@ function renderVoronoiDual(mapPoints, data, baseFill, overlayFill) {
     const delaunay = d3.Delaunay.from(mapPoints);
     const voronoi = delaunay.voronoi(bounds);
 
+    // When both layers are present, use lower opacity so overlap is visible
+    const baseOpacity = hasOverlay ? 0.5 : 0.85;
+    const overlayOpacity = hasBase ? 0.5 : 0.35;
+
     if (hasBase) {
         const base = svg.append("g").attr("clip-path", clip);
         base
@@ -924,7 +829,7 @@ function renderVoronoiDual(mapPoints, data, baseFill, overlayFill) {
             .append("path")
             .attr("d", (_, i) => voronoi.renderCell(i))
             .attr("fill", d => baseFill ? baseFill(d) : "#111827")
-            .attr("fill-opacity", 0.85)
+            .attr("fill-opacity", baseOpacity)
             .attr("stroke", "rgba(255,255,255,0.08)")
             .attr("stroke-width", 0.5)
             .attr("class", "transition-color")
@@ -941,7 +846,7 @@ function renderVoronoiDual(mapPoints, data, baseFill, overlayFill) {
             .append("path")
             .attr("d", (_, i) => voronoi.renderCell(i))
             .attr("fill", d => overlayFill(d) || "rgba(0,0,0,0)")
-            .attr("fill-opacity", 0.35)
+            .attr("fill-opacity", overlayOpacity)
             .attr("stroke", "none")
             .attr("class", "transition-color")
             .style("pointer-events", "none");

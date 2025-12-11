@@ -12,9 +12,14 @@ let sampleChart = null;
 let hasLoadedSamples = false;
 let chartJsLoaded = false;
 
-// Cache for loaded sample data to avoid re-downloading
-// Key format: "s{solarGw}_b{battGwh}" -> {data: [...], enriched: boolean}
-const sampleDataCache = new Map();
+// Cache for Arrow table wrappers (stores the columnar data, not materialized rows)
+// Key format: "s{solarGw}_b{battGwh}" -> Arrow table wrapper from loadSampleColumnar()
+const sampleTableCache = new Map();
+
+// Cache for materialized season data (only seasons that have been accessed)
+// Key format: "s{solarGw}_b{battGwh}_{season}" -> [{location data}, ...]
+const seasonDataCache = new Map();
+
 let cachedSummaryMap = null; // Cached coordinate map for enrichment
 
 // Dynamic Chart.js loader for samples module
@@ -106,7 +111,6 @@ export async function loadSampleWeekData(solarGw, battGwh, summaryData) {
 
     const cacheKey = `s${solarGw}_b${battGwh}`;
     console.log(`Loading sample week data for Solar ${solarGw} MW, Battery ${battGwh} MWh`);
-    selectedSeason = weekSelect.value;
 
     const key = `sol${solarGw}batt${battGwh}`;
     if (!['sol1batt0', 'sol5batt8', 'sol10batt18', 'sol5batt4', 'sol20batt36'].includes(key) && solarGw > 10 && battGwh < 18) {
@@ -120,22 +124,21 @@ export async function loadSampleWeekData(solarGw, battGwh, summaryData) {
     }
 
     try {
-        let data;
+        let tableWrapper;
+        let seasons;
 
-        // Check cache first - avoid re-downloading if we already have this config
-        if (sampleDataCache.has(cacheKey)) {
-            console.log(`Using cached sample data for ${cacheKey}`);
-            data = sampleDataCache.get(cacheKey);
+        // Check cache for Arrow table wrapper first
+        if (sampleTableCache.has(cacheKey)) {
+            console.log(`Using cached Arrow table for ${cacheKey}`);
+            tableWrapper = sampleTableCache.get(cacheKey);
+            seasons = tableWrapper.getSeasons();
         } else {
-            // Load sample data for this configuration
+            // Load sample data using columnar loader (doesn't materialize all rows)
             console.log(`Downloading sample data for ${cacheKey}...`);
-            const { loadSample } = await import('./data.js');
-            data = await loadSample(solarGw, battGwh);
+            const { loadSampleColumnar } = await import('./data.js');
+            tableWrapper = await loadSampleColumnar(solarGw, battGwh);
 
-            console.log('Sample data loaded:', data);
-            console.log('Data length:', data?.length);
-
-            if (!data || data.length === 0) {
+            if (!tableWrapper || tableWrapper.numRows === 0) {
                 console.warn('No sample data available');
                 sampleWeekData = null;
                 weekSelect.innerHTML = '<option>No data available</option>';
@@ -143,41 +146,25 @@ export async function loadSampleWeekData(solarGw, battGwh, summaryData) {
                 return;
             }
 
-            // Build summary map once and cache it
-            if (!cachedSummaryMap && summaryData && summaryData.length > 0) {
-                cachedSummaryMap = new Map();
-                summaryData.forEach(row => {
-                    cachedSummaryMap.set(row.location_id, {
-                        latitude: row.latitude,
-                        longitude: row.longitude
-                    });
-                });
-            }
+            // Cache the Arrow table wrapper for future season switches
+            sampleTableCache.set(cacheKey, tableWrapper);
+            console.log(`Arrow table cached: ${tableWrapper.numRows} total rows`);
 
-            // Add coordinates to each sample row using cached summary map
-            if (cachedSummaryMap) {
-                data.forEach(row => {
-                    const coords = cachedSummaryMap.get(row.location_id);
-                    if (coords) {
-                        row.latitude = coords.latitude;
-                        row.longitude = coords.longitude;
-                    }
-                });
-            }
-
-            console.log('Merged coordinates. Caching for future use.');
-            // Cache the enriched data
-            sampleDataCache.set(cacheKey, data);
+            // Get available seasons (fast columnar access, no row materialization)
+            seasons = tableWrapper.getSeasons();
+            console.log('Available seasons:', seasons);
         }
 
-        // Store all data - it's already organized by location and season
-        sampleWeekData = data;
-
-        // Get unique seasons from the data
-        const seasons = [...new Set(data.map(d => d.season))].filter(Boolean);
-
-        console.log('Available seasons:', seasons);
-        console.log('Sample week data set:', sampleWeekData.length, 'location-season combinations');
+        // Build summary map once and cache it (for coordinate enrichment)
+        if (!cachedSummaryMap && summaryData && summaryData.length > 0) {
+            cachedSummaryMap = new Map();
+            summaryData.forEach(row => {
+                cachedSummaryMap.set(row.location_id, {
+                    latitude: row.latitude,
+                    longitude: row.longitude
+                });
+            });
+        }
 
         // Populate week selector
         weekSelect.innerHTML = seasons
@@ -193,6 +180,31 @@ export async function loadSampleWeekData(solarGw, battGwh, summaryData) {
         if (weekSelect.value !== desiredSeason) {
             weekSelect.value = desiredSeason;
         }
+
+        // LAZY LOADING: Only materialize the selected season's data
+        const seasonKey = `${cacheKey}_${desiredSeason}`;
+        if (!seasonDataCache.has(seasonKey)) {
+            console.log(`Materializing season data for ${desiredSeason}...`);
+            const seasonData = tableWrapper.getRowsForSeason(desiredSeason);
+
+            // Add coordinates to each sample row using cached summary map
+            if (cachedSummaryMap) {
+                seasonData.forEach(row => {
+                    const coords = cachedSummaryMap.get(row.location_id);
+                    if (coords) {
+                        row.latitude = coords.latitude;
+                        row.longitude = coords.longitude;
+                    }
+                });
+            }
+
+            seasonDataCache.set(seasonKey, seasonData);
+            console.log(`Season ${desiredSeason} cached: ${seasonData.length} locations`);
+        }
+
+        // Set current data to the selected season only
+        sampleWeekData = seasonDataCache.get(seasonKey);
+        console.log('Sample week data set:', sampleWeekData.length, 'locations for', desiredSeason);
 
         // Load selected week, preserving frame index if the season unchanged
         if (weekSelect.options.length > 0) {
@@ -219,20 +231,60 @@ export async function loadSampleWeekData(solarGw, battGwh, summaryData) {
 
 function handleWeekChange({ preserveFrame = false } = {}) {
     const season = weekSelect.value;
-    if (!sampleWeekData || !season) return;
+    if (!season) return;
     selectedSeason = season;
 
-    // Find first location's data for this season to get timestamps
-    const seasonData = sampleWeekData.find(d => d.season === season);
-    if (!seasonData || !seasonData.timestamps) {
+    const cacheKey = `s${currentSolar}_b${currentBatt}`;
+    const seasonKey = `${cacheKey}_${season}`;
+
+    // LAZY LOADING: Check if this season's data is already materialized
+    if (!seasonDataCache.has(seasonKey)) {
+        // Need to materialize this season from the Arrow table
+        const tableWrapper = sampleTableCache.get(cacheKey);
+        if (!tableWrapper) {
+            console.warn('No Arrow table cached for', cacheKey);
+            return;
+        }
+
+        console.log(`Lazy loading season data for ${season}...`);
+        const seasonData = tableWrapper.getRowsForSeason(season);
+
+        // Add coordinates to each sample row using cached summary map
+        if (cachedSummaryMap) {
+            seasonData.forEach(row => {
+                const coords = cachedSummaryMap.get(row.location_id);
+                if (coords) {
+                    row.latitude = coords.latitude;
+                    row.longitude = coords.longitude;
+                }
+            });
+        }
+
+        seasonDataCache.set(seasonKey, seasonData);
+        console.log(`Season ${season} lazy loaded: ${seasonData.length} locations`);
+    }
+
+    // Update current data to the new season
+    sampleWeekData = seasonDataCache.get(seasonKey);
+
+    if (!sampleWeekData || sampleWeekData.length === 0) {
         console.warn('No data for season:', season);
+        return;
+    }
+
+    // Find first location's data to get timestamps
+    const seasonData = sampleWeekData[0];
+    if (!seasonData || !seasonData.timestamps) {
+        console.warn('No timestamps for season:', season);
         return;
     }
 
     console.log(`Selected season: ${season}, timestamps:`, seasonData.timestamps.length);
 
     // Update scrubber max based on actual data length
-    const numFrames = seasonData.timestamps.length;
+    const numFrames = Array.isArray(seasonData.timestamps)
+        ? seasonData.timestamps.length
+        : seasonData.timestamps.toArray?.().length || 168;
     timeScrubber.max = numFrames - 1;
 
     const defaultStart = Math.floor(numFrames / 3);
@@ -249,12 +301,9 @@ function handleWeekChange({ preserveFrame = false } = {}) {
 }
 
 function handleScrubberChange() {
-    if (!sampleWeekData) return;
+    if (!sampleWeekData || sampleWeekData.length === 0) return;
 
     const season = weekSelect.value;
-    const seasonData = sampleWeekData.find(d => d.season === season);
-    if (!seasonData) return;
-
     currentFrameIndex = parseInt(timeScrubber.value);
     renderFrame(season, currentFrameIndex);
 }
@@ -269,19 +318,23 @@ function togglePlayback() {
 
 function startPlayback() {
     if (playbackTimer) return;
-    if (!sampleWeekData) return;
+    if (!sampleWeekData || sampleWeekData.length === 0) return;
 
     const season = weekSelect.value;
-    const seasonData = sampleWeekData.find(d => d.season === season);
-    if (!seasonData) return;
+    const firstLoc = sampleWeekData[0];
+    if (!firstLoc || !firstLoc.timestamps) return;
 
     playButton.textContent = 'Pause';
 
+    // Get timestamp count once (all locations have same length)
+    const timestamps = Array.isArray(firstLoc.timestamps)
+        ? firstLoc.timestamps
+        : firstLoc.timestamps.toArray?.() || [];
+    const numFrames = timestamps.length;
+
     playbackTimer = setInterval(() => {
         const season = weekSelect.value;
-        const seasonData = sampleWeekData.find(d => d.season === season);
-        if (!seasonData) return;
-        currentFrameIndex = (currentFrameIndex + 1) % seasonData.timestamps.length;
+        currentFrameIndex = (currentFrameIndex + 1) % numFrames;
         timeScrubber.value = currentFrameIndex;
         renderFrame(season, currentFrameIndex);
     }, 500); // 500ms per frame
@@ -301,8 +354,8 @@ function resetToStart() {
     const season = weekSelect.value;
     if (!sampleWeekData) return;
 
-    const seasonData = sampleWeekData.find(d => d.season === season);
-    if (!seasonData) return;
+    // sampleWeekData now only contains current season
+    if (sampleWeekData.length === 0) return;
 
     currentFrameIndex = 0;
     timeScrubber.value = 0;
@@ -321,14 +374,8 @@ function renderFrame(season, frameIndex) {
         return;
     }
 
-    // Get first location's data for this season to extract timestamps
-    const seasonData = sampleWeekData.find(d => d.season === season);
-    console.log('seasonData found:', seasonData ? 'YES' : 'NO');
-    if (seasonData) {
-        console.log('seasonData.timestamps type:', typeof seasonData.timestamps, 'exists:', !!seasonData.timestamps);
-        console.log('seasonData.timestamps:', seasonData.timestamps);
-    }
-
+    // sampleWeekData now only contains current season, use first location for timestamps
+    const seasonData = sampleWeekData[0];
     if (!seasonData || !seasonData.timestamps) {
         console.warn('Early exit: no seasonData or timestamps');
         return;
@@ -353,8 +400,8 @@ function renderFrame(season, frameIndex) {
     scrubberTime.textContent = date.toUTCString().replace('GMT', 'UTC');
     scrubberProgress.textContent = `Hour ${frameIndex + 1} / ${timestamps.length}`;
 
-    // Filter sampleWeekData for only the current season
-    const locationsForSeason = sampleWeekData.filter(loc => loc.season === season);
+    // sampleWeekData now only contains current season, use all locations
+    const locationsForSeason = sampleWeekData;
 
     console.log(`Rendering frame ${frameIndex} for ${season}: ${locationsForSeason.length} locations`);
 
@@ -459,8 +506,9 @@ async function renderSampleChartForSelected(forceShow = true) {
     const season = selectedSeason || weekSelect.value;
     if (!season) return;
 
+    // sampleWeekData now only contains current season, just find by location_id
     const dataset = sampleWeekData.find(
-        d => d.location_id === selectedSampleLocation.location_id && d.season === season
+        d => d.location_id === selectedSampleLocation.location_id
     );
 
     if (!dataset) {
@@ -491,7 +539,6 @@ async function renderSampleChartForSelected(forceShow = true) {
     const curtailedData = [];
     const demandData = [];
     let maxPositive = 0;
-    let maxNegative = 0;
 
     for (let i = 0; i < length; i++) {
         const solarVal = Math.max(0, solarGen[i] || 0);
@@ -502,8 +549,7 @@ async function renderSampleChartForSelected(forceShow = true) {
         const otherSupply = Math.max(0, 1 - solarUsed - dischargeUsed);
         const charge = Math.max(0, - (batteryFlow[i] || 0));
         const curtailed = Math.max(0, solarVal - solarUsed - charge);
-        maxPositive = Math.max(maxPositive, solarUsed + dischargeUsed + otherSupply + curtailed);
-        maxNegative = Math.min(maxNegative, -charge);
+        maxPositive = Math.max(maxPositive, solarUsed + dischargeUsed + otherSupply + curtailed + charge);
 
         const day = Math.floor(i / 24) + 1;
         const hour = i % 24;
@@ -512,7 +558,7 @@ async function renderSampleChartForSelected(forceShow = true) {
         solarData.push(Number(solarUsed.toFixed(4)));
         dischargeData.push(Number(dischargeUsed.toFixed(4)));
         otherData.push(Number(otherSupply.toFixed(4)));
-        chargeData.push(Number((-charge).toFixed(4))); // negative for stacking
+        chargeData.push(Number(charge.toFixed(4))); // positive, stacks on top
         curtailedData.push(Number(curtailed.toFixed(4)));
         demandData.push(1);
     }
@@ -548,8 +594,7 @@ async function renderSampleChartForSelected(forceShow = true) {
     if (sampleChart) {
         sampleChart.destroy();
     }
-    const yMax = Math.max(1.2, maxPositive + 0.2);
-    const yMin = Math.min(-1.2, maxNegative - 0.2);
+    const yMax = Math.max(1.5, maxPositive + 0.2);
     sampleChart = new ChartJS(ctx, {
         type: 'bar',
         data: {
@@ -577,18 +622,18 @@ async function renderSampleChartForSelected(forceShow = true) {
                     stack: 'supply'
                 },
                 {
-                    label: 'Curtailed Solar',
-                    data: curtailedData,
-                    backgroundColor: '#fb923c',
-                    borderWidth: 0,
-                    stack: 'curtail'
-                },
-                {
                     label: 'Battery (charge)',
                     data: chargeData,
                     backgroundColor: '#0ea5e9',
                     borderWidth: 0,
-                    stack: 'charge'
+                    stack: 'supply'
+                },
+                {
+                    label: 'Curtailed Solar',
+                    data: curtailedData,
+                    backgroundColor: '#fb923c',
+                    borderWidth: 0,
+                    stack: 'supply'
                 },
                 {
                     label: 'Demand (1 MW)',
@@ -634,7 +679,7 @@ async function renderSampleChartForSelected(forceShow = true) {
                 },
                 y: {
                     stacked: true,
-                    suggestedMin: yMin,
+                    suggestedMin: 0,
                     suggestedMax: yMax,
                     ticks: {
                         color: '#94a3b8',

@@ -1,6 +1,13 @@
 import { loadSummary, loadPopulationCsv, loadGemPlantsCsv, loadVoronoiGemCapacityCsv, loadElectricityDemandData } from './data.js';
-import { initMap, updateMap, updateLcoeMap, updateCfMap, updatePopulationSimple } from './map.js';
+import {
+    initMap, updateMap, updatePopulationPolygons, updatePopulationGeo,
+    updateLcoeMap, updateCfMap, updateMapWithSampleFrame,
+    setSampleLocationClickHandler, capitalRecoveryFactor, updatePopulationSimple,
+    initSubsetMap, renderSubsetMap, subsetMap
+} from './map.js';
 import { initSampleDays, loadSampleWeekData, cleanupSampleDays } from './samples.js';
+
+const d3 = window.d3;
 
 // State
 let summaryData = [];
@@ -27,6 +34,124 @@ let lcoeDisplayMode = 'delta'; // 'delta' or 'transmission'
 let populationChartCumulative = false;
 let lcoeTargetMode = 'utilization'; // 'utilization' or 'lcoe'
 let targetLcoeValue = 90; // $/MWh
+
+// Lazy loading state flags - these datasets are only loaded when their views are accessed
+let populationDataLoaded = false;
+let fossilDataLoaded = false;
+let electricityDataLoaded = false;
+let chartJsLoaded = false;
+
+// Dynamic Chart.js loader
+async function ensureChartJsLoaded() {
+    if (chartJsLoaded || window.Chart) {
+        chartJsLoaded = true;
+        return;
+    }
+
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/chart.js';
+        script.onload = () => {
+            chartJsLoaded = true;
+            console.log('Chart.js loaded dynamically');
+            resolve();
+        };
+        script.onerror = () => reject(new Error('Failed to load Chart.js'));
+        document.head.appendChild(script);
+    });
+}
+
+// Lazy data loaders - only load when needed
+async function ensurePopulationDataLoaded() {
+    if (populationDataLoaded) return true;
+
+    try {
+        loadingStatus.textContent = 'Loading population data...';
+        loading.classList.remove('hidden');
+
+        populationData = await loadPopulationCsv();
+        populationCoordIndex = buildCoordIndex(populationData);
+        populationDataLoaded = true;
+
+        loading.classList.add('hidden');
+        return true;
+    } catch (err) {
+        console.error('Population data load failed:', err);
+        populationData = [];
+        populationCoordIndex = new Map();
+        loading.classList.add('hidden');
+        return false;
+    }
+}
+
+async function ensureFossilDataLoaded() {
+    if (fossilDataLoaded) return true;
+
+    try {
+        loadingStatus.textContent = 'Loading power plant data...';
+        loading.classList.remove('hidden');
+
+        fossilPlants = await loadGemPlantsCsv();
+        fossilCapacity = await loadVoronoiGemCapacityCsv();
+        fossilCapacityMap = new Map(fossilCapacity.map(row => [row.location_id, row]));
+
+        // Enrich fossil plants with location_id if we have summary data
+        if (fossilPlants.length && fossilCapacity.length) {
+            const sites = fossilCapacity.map(d => [d.latitude, d.longitude]);
+            const delaunay = d3.Delaunay.from(sites);
+            fossilPlants.forEach(plant => {
+                const idx = delaunay.find(plant.latitude, plant.longitude);
+                if (idx !== -1 && fossilCapacity[idx]) {
+                    plant.location_id = fossilCapacity[idx].location_id;
+                }
+            });
+            console.log('Enriched fossilPlants with location_ids via spatial join.');
+        }
+
+        fossilDataLoaded = true;
+        loading.classList.add('hidden');
+        return true;
+    } catch (err) {
+        console.error('Fossil data load failed:', err);
+        fossilPlants = [];
+        fossilCapacity = [];
+        fossilCapacityMap = new Map();
+        loading.classList.add('hidden');
+        return false;
+    }
+}
+
+async function ensureElectricityDataLoaded() {
+    if (electricityDataLoaded) return true;
+
+    try {
+        loadingStatus.textContent = 'Loading electricity demand data...';
+        loading.classList.remove('hidden');
+
+        electricityDemandData = await loadElectricityDemandData();
+        electricityDemandMap = new Map(electricityDemandData.map(row => [row.location_id, row]));
+        electricityDataLoaded = true;
+
+        loading.classList.add('hidden');
+        return true;
+    } catch (err) {
+        console.error('Electricity demand data load failed:', err);
+        electricityDemandData = [];
+        electricityDemandMap = new Map();
+        loading.classList.add('hidden');
+        return false;
+    }
+}
+
+// Load all population-mode data (called when switching to population view)
+async function ensurePopulationModeDataLoaded() {
+    const results = await Promise.all([
+        ensurePopulationDataLoaded(),
+        ensureFossilDataLoaded(),
+        ensureElectricityDataLoaded()
+    ]);
+    return results.every(r => r);
+}
 
 // LCOE Display Mode Toggle (Delta vs Transmission Cost)
 const lcoeDisplayModeButtons = document.querySelectorAll('#lcoe-display-mode button');
@@ -250,12 +375,7 @@ function describeFuelSelection(set) {
     return 'selected fossil';
 }
 
-function capitalRecoveryFactor(rate, years) {
-    if (years <= 0) return 0;
-    if (rate === 0) return 1 / years;
-    const pow = Math.pow(1 + rate, years);
-    return (rate * pow) / (pow - 1);
-}
+// capitalRecoveryFactor is imported from map.js
 
 function haversineKm(lat1, lon1, lat2, lon2) {
     const toRad = (deg) => deg * Math.PI / 180;
@@ -270,7 +390,7 @@ function haversineKm(lat1, lon1, lat2, lon2) {
 }
 
 function coordKey(lat, lon) {
-    return `${lat.toFixed(6)},${lon.toFixed(6)}`;
+    return `${lat.toFixed(6)},${lon.toFixed(6)} `;
 }
 
 function computeConfigLcoe(row, params) {
@@ -324,7 +444,7 @@ function formatNumber(value, decimals = 0) {
 
 function formatCurrencyLabel(value, decimals = 0) {
     const num = formatNumber(value, decimals);
-    return num === '--' ? '--' : `$${num}`;
+    return num === '--' ? '--' : `$${num} `;
 }
 
 
@@ -626,7 +746,7 @@ function updatePopulationFuelToggleUI() {
     // Update legend items opacity
     const allFuels = ['coal', 'oil_gas', 'bioenergy', 'nuclear'];
     allFuels.forEach(fuel => {
-        const item = document.getElementById(`legend-item-${fuel}`);
+        const item = document.getElementById(`legend - item - ${fuel} `);
         if (item) {
             item.style.opacity = populationFuelFilter.has(fuel) ? '1' : '0.4';
         }
@@ -928,8 +1048,8 @@ function updateLcoeLegend(points, overrideInfo = null) {
                 const max = Math.max(rawMax, 1);
                 const mid = Math.max(pick(0.5), max * 0.5);
                 domain = [0, mid, max];
-                midLabel = `${formatCurrencyLabel(mid / 1000)}/MW/km`;
-                maxLabel = `${formatCurrencyLabel(max / 1000)}/MW/km`;
+                midLabel = `${formatCurrencyLabel(mid / 1000)} /MW/km`;
+                maxLabel = `${formatCurrencyLabel(max / 1000)} /MW/km`;
             } else {
                 domain = [0, 1, 1];
             }
@@ -1051,7 +1171,7 @@ function queueLcoeUpdate() {
 function buildPopulationMetrics(enrichedPop, overlayMode, cfData, lcoeData) {
     const cfByCoord = new Map(cfData.map(d => [coordKey(d.latitude, d.longitude), d]));
     const lcoeByCoord = new Map(lcoeData.map(d => [coordKey(d.latitude, d.longitude), d]));
-    return enrichedPop.map(p => {
+    return enrichedPop.map((p, idx) => {
         const key = coordKey(p.latitude, p.longitude);
         const cfRow = cfByCoord.get(key);
         const lcoeRow = lcoeByCoord.get(key);
@@ -1067,7 +1187,10 @@ function buildPopulationMetrics(enrichedPop, overlayMode, cfData, lcoeData) {
         if ((overlayMode === 'cf' || overlayMode === 'lcoe') && !Number.isFinite(metricVal)) {
             return null;
         }
+        // Get location_id from cfRow or lcoeRow (they should have it)
+        const location_id = cfRow?.location_id ?? lcoeRow?.location_id ?? idx;
         return {
+            location_id,
             latitude: p.latitude,
             longitude: p.longitude,
             metric: metricVal,
@@ -1114,6 +1237,7 @@ function buildPlantMetrics(capacityRows, overlayMode, cfData, lcoeData, selected
             return {
                 latitude: Number(row.latitude),
                 longitude: Number(row.longitude),
+                location_id: row.location_id,
                 metric: metricVal,
                 weight: weight,
                 fuel: fuel
@@ -1178,7 +1302,7 @@ function buildStackedHistogram(metrics, overlayMode, selectedFuels, bucketCount 
         stack: 'stack0'
     }));
 
-    return { labels, datasets };
+    return { labels, datasets, buckets };
 }
 
 function buildWeightedHistogram(metrics, overlayMode, bucketCount = 50) {
@@ -1229,7 +1353,7 @@ function buildWeightedHistogram(metrics, overlayMode, bucketCount = 50) {
         });
         const data = buckets.map(b => b.weight);
 
-        return { labels, data };
+        return { labels, data, buckets };
     } else {
         // For no overlay, show percentile-based distribution
         // Sort by metric descending and calculate cumulative weight percentiles
@@ -1292,8 +1416,198 @@ function destroyChart(chart) {
     }
 }
 
-function renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels }) {
+const formatMetricValue = (val, mode) => {
+    if (mode === 'cf') return `${(val * 100).toFixed(1)}%`;
+    if (mode === 'lcoe') return `$${val.toFixed(0)}`;
+    return val.toLocaleString('en-US', { maximumFractionDigits: 0 });
+};
+
+function handleHistogramClick(bucket, metrics, overlayMode, baseLayer) {
+    if (!bucket) return;
+    const { min, max } = bucket;
+
+    // Filter data
+    const subset = metrics.filter(m => m.metric >= min && m.metric < max);
+    console.warn(`[HistogramClick] Bucket: ${min.toFixed(2)}-${max.toFixed(2)}, Metrics: ${metrics.length}, Subset: ${subset.length}`);
+
+    if (subset.length === 0) return;
+
+    // Show modal
+    // Show modal
+    const modal = document.getElementById('subset-map-modal');
+    const titleEl = document.getElementById('subset-map-title');
+    const closeBtn = document.getElementById('close-subset-map');
+    const legendRange = document.getElementById('subset-map-legend-range');
+
+    if (modal) modal.classList.remove('hidden');
+
+    if (titleEl) {
+        if (baseLayer === 'plants') {
+            titleEl.textContent = 'Capacity Subset';
+        } else {
+            titleEl.textContent = overlayMode === 'cf' ? 'Capacity Factor Subset' : 'LCOE Subset';
+        }
+    }
+
+    if (legendRange) {
+        if (overlayMode === 'cf') legendRange.textContent = `${(min * 100).toFixed(1)}% – ${(max * 100).toFixed(1)}%`;
+        else if (overlayMode === 'lcoe') legendRange.textContent = `$${min.toFixed(0)} – $${max.toFixed(0)}`;
+        else legendRange.textContent = `${min.toLocaleString()} – ${max.toLocaleString()}`;
+    }
+
+    // Accessors for Plants
+    let getRadius = null;
+    let getTooltip = null;
+
+    if (baseLayer === 'plants') {
+        getRadius = (d) => {
+            // Replicate main map logic:
+            // const radius = Math.max(2, Math.min(12, Math.sqrt(baseCapacity) * 0.15));
+            const cap = Number.isFinite(d.weight) ? Math.max(d.weight, 0) : 0;
+            return Math.max(2, Math.min(12, Math.sqrt(cap) * 0.15));
+        };
+        getTooltip = (d) => {
+            // Rich Tooltip
+            return `${d.plant_name || 'Plant'} (${d.fuel || 'Unknown'})\nCapacity: ${(d.weight || 0).toLocaleString()} MW\nStatus: ${d.status || 'Unknown'}`;
+        };
+    }
+
+    // Init map
+    // Use requestAnimationFrame to ensure the modal is visible and layout is updated
+    requestAnimationFrame(() => {
+        initSubsetMap();
+
+        // Render after slight delay for map invalidation
+        setTimeout(() => {
+            let dataToRender = metrics;
+            let subsetIds = subset.map(d => d.location_id);
+            let getValue = d => d.metric;
+            let finalGetColor = getColor;
+
+            let onPointHover = null;
+            let onPointOut = null;
+
+            if (baseLayer === 'plants') {
+                // If plants layer, we want to show INDIVIDUAL plants
+                const validLocationIds = new Set(subsetIds);
+                dataToRender = fossilPlants.filter(p => validLocationIds.has(p.location_id));
+                subsetIds = dataToRender.map(d => d.location_id);
+
+                // --- COLORS ---
+                // User wants fuel colors (from FUEL_COLORS)
+                // getValue must return the entire object so getColor can access fuel_group
+                getValue = d => d;
+                finalGetColor = d => FUEL_COLORS[d.fuel_group || d.fuel] || '#ccc';
+
+                // --- POPUP / TOOLTIPS ---
+                const plantPopup = L.popup({
+                    closeButton: false,
+                    autoPan: false,
+                    className: 'bg-transparent border-none shadow-none'
+                });
+
+                onPointHover = (e, d) => {
+                    const latlng = subsetMap.layerPointToLatLng([e.target.getAttribute('cx'), e.target.getAttribute('cy')]);
+                    // Assuming e.target is circle, cx/cy are attributes. Or use e.layerPoint? 
+                    // d3 e is MouseEvent. 
+                    // But easier: d.latitude, d.longitude
+                    const ll = [d.latitude, d.longitude];
+
+                    const baseCapacity = Number.isFinite(d.capacity_mw) ? d.capacity_mw : (d.weight || 0);
+                    const cap = Math.round(baseCapacity).toLocaleString();
+                    const fuel = (d.fuel_group || d.fuel || 'Unknown').toUpperCase();
+                    const status = capitalizeWord(d.status || 'Unknown');
+                    const name = d.plant_name || 'Power plant';
+                    const country = d.country || 'Unknown';
+
+                    const content = `<div class="bg-slate-900 text-white border border-slate-700 px-3 py-2 rounded text-xs max-w-xs pointer-events-none">
+                        <div class="font-semibold">${name}</div>
+                        <div>${fuel} • ${cap} MW</div>
+                        <div class="text-slate-300">${status}</div>
+                        <div class="text-slate-400">${country}</div>
+                     </div>`;
+
+                    plantPopup.setLatLng(ll).setContent(content).openOn(subsetMap);
+                };
+
+                onPointOut = () => {
+                    subsetMap.closePopup(plantPopup);
+                };
+
+                // --- LEGEND ---
+                // Hide range legend, Show Fuel Legend
+                if (legendRange) {
+                    legendRange.innerHTML = ''; // Clear text
+                    // Append fuel swatches
+                    const fuels = ['Coal', 'Oil_Gas', 'Bioenergy', 'Nuclear'];
+                    fuels.forEach(fuelKey => {
+                        const key = fuelKey.toLowerCase();
+                        const color = FUEL_COLORS[key];
+                        const item = document.createElement('span');
+                        item.className = 'inline-flex items-center mr-3';
+                        item.innerHTML = `<span style="background-color:${color};width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:4px;"></span> ${capitalizeWord(key.replace('_', ' / '))}`;
+                        legendRange.appendChild(item);
+                    });
+                }
+
+            } else {
+                // Reset legend if mistakenly set to fuels?
+                // The earlier code sets textContent if not plants.
+                // So we are safe, provided we didn't clear it above inside the block.
+            }
+
+            renderSubsetMap(
+                dataToRender,
+                subsetIds,
+                getValue,
+                finalGetColor,
+                baseLayer,
+                getRadius,
+                getTooltip,
+                onPointHover,
+                onPointOut
+            );
+        }, 50);
+    });
+
+    // Scales
+    let getColor;
+    if (overlayMode === 'cf') {
+        const scale = d3.scaleLinear()
+            .domain([0, 0.05, 0.4, 0.7, 1.0])
+            .range(["#0049ff", "#0049ff", "#00c853", "#ff9800", "#d32f2f"])
+            .interpolate(d3.interpolateRgb)
+            .clamp(true);
+        getColor = (v) => scale(v);
+    } else if (overlayMode === 'lcoe') {
+        const vals = metrics.map(m => m.metric).filter(Number.isFinite);
+        const minV = Math.min(...vals);
+        const maxV = Math.max(...vals);
+        const scale = d3.scaleSequential(d3.interpolateTurbo).domain([minV, maxV]);
+        getColor = (v) => scale(v);
+    } else if (baseLayer === 'electricity') {
+        const vals = metrics.map(m => m.metric).filter(v => v > 0);
+        const maxV = Math.max(...vals);
+        const s = d3.scaleSequentialLog(t => d3.interpolateGreys(1 - t)).domain([Math.max(0.1, maxV / 1000), maxV]);
+        getColor = (v) => s(Math.max(0.1, v));
+    } else {
+        const scale = d3.scaleLinear().domain([min, max]).range(["#e5e7eb", "#1f2937"]);
+        getColor = (v) => scale(v);
+    }
+
+    if (closeBtn) {
+        closeBtn.onclick = () => {
+            modal.classList.add('hidden');
+        };
+    }
+}
+
+async function renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels }) {
     if (!populationChartHistogram || !populationChartLatMetric || !populationChartLatPop) return;
+
+    // Dynamically load Chart.js if not already loaded
+    await ensureChartJsLoaded();
+
     const ChartJS = window.Chart;
     if (!ChartJS) return;
 
@@ -1330,9 +1644,9 @@ function renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels
         histogramMainTitle = 'Distribution by Capacity Factor';
         histogramHelperText = `Shows total ${weightDescriptor} as a function of Capacity Factor`;
     } else if (isLcoe) {
-        xAxisLabel = 'LCOE ($/MWh)';
+        xAxisLabel = 'LCOE solar + battery ($/MWh)';
         yAxisLabel = weightUnit;
-        scatterXAxisLabel = 'LCOE ($/MWh)';
+        scatterXAxisLabel = 'LCOE solar + battery ($/MWh)';
         histogramMainTitle = 'Distribution by LCOE';
         histogramHelperText = `Shows total ${weightDescriptor} as a function of LCOE`;
     } else {
@@ -1379,9 +1693,12 @@ function renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels
 
     let histogramTooltip;
 
+    let hist;
     if (isStacked) {
         // Stacked View
-        const rawHist = buildStackedHistogram(metrics, overlayMode, fuelSet);
+        // Stacked View
+        hist = buildStackedHistogram(metrics, overlayMode, fuelSet);
+        const rawHist = hist; // Alias for legacy code if needed, or just use hist
         if (typeof populationChartCumulative !== 'undefined' && populationChartCumulative) {
             // Apply cumulative sum per dataset
             rawHist.datasets.forEach(ds => {
@@ -1404,7 +1721,7 @@ function renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels
         // Note: Non-overlay percentiles for plants needs adaptation if metrics are flattened.
         // buildWeightedHistogram handles flat metrics fine (sorts by metric).
 
-        const hist = buildWeightedHistogram(metrics, overlayMode);
+        hist = buildWeightedHistogram(metrics, overlayMode);
         let chartData = hist.data;
         if ((isCf || isLcoe) && typeof populationChartCumulative !== 'undefined' && populationChartCumulative) {
             let sum = 0;
@@ -1463,6 +1780,16 @@ function renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels
                     legend: { display: isStacked }, // Show legend if stacked
                     tooltip: { callbacks: { label: histogramTooltip } }
                 },
+                onClick: (e, elements) => {
+                    if (elements && elements.length > 0 && hist.buckets) {
+                        const index = elements[0].index;
+                        const bucket = hist.buckets[index];
+                        handleHistogramClick(bucket, metrics, overlayMode, baseLayer);
+                    }
+                },
+                onHover: (event, chartElement) => {
+                    event.native.target.style.cursor = chartElement[0] ? 'pointer' : 'default';
+                },
                 scales: {
                     x: {
                         title: { display: true, text: xAxisLabel },
@@ -1479,6 +1806,13 @@ function renderPopulationCharts(metrics, { overlayMode, baseLayer, selectedFuels
         populationCharts.histogram.data = histogramData;
         populationCharts.histogram.options.plugins.legend.display = isStacked;
         populationCharts.histogram.options.plugins.tooltip.callbacks.label = histogramTooltip;
+        populationCharts.histogram.options.onClick = (e, elements) => {
+            if (elements && elements.length > 0 && hist.buckets) {
+                const index = elements[0].index;
+                const bucket = hist.buckets[index];
+                handleHistogramClick(bucket, metrics, overlayMode, baseLayer);
+            }
+        };
         populationCharts.histogram.options.scales.x.title.text = xAxisLabel;
         populationCharts.histogram.options.scales.x.stacked = isStacked;
         populationCharts.histogram.options.scales.y.title.text = yAxisLabel;
@@ -1772,7 +2106,8 @@ async function init() {
         // Initialize Hourly Profile Samples
         initSampleDays(sampleWeekSelect);
 
-        // Load Data
+        // Load ONLY essential data upfront - summary data is required for the initial view
+        // Population, fossil plants, and electricity data are lazy-loaded when their views are accessed
         loadingStatus.textContent = "Downloading summary data...";
         summaryData = await loadSummary();
         console.log("summaryData loaded:", typeof summaryData, Array.isArray(summaryData), summaryData ? summaryData.length : 'null');
@@ -1782,38 +2117,9 @@ async function init() {
         locationIndex = buildLocationIndex(summaryData);
         summaryCoordIndex = buildCoordIndex(summaryData);
 
-        try {
-            populationData = await loadPopulationCsv();
-            populationCoordIndex = buildCoordIndex(populationData);
-        } catch (err) {
-            console.error("Population data load failed:", err);
-            populationData = [];
-            populationCoordIndex = new Map();
-        }
-        try {
-            loadingStatus.textContent = "Loading power plant data...";
-            fossilPlants = await loadGemPlantsCsv();
-        } catch (err) {
-            console.error("GEM plant data load failed:", err);
-            fossilPlants = [];
-        }
-        try {
-            fossilCapacity = await loadVoronoiGemCapacityCsv();
-            fossilCapacityMap = new Map(fossilCapacity.map(row => [row.location_id, row]));
-        } catch (err) {
-            console.error("GEM capacity CSV load failed:", err);
-            fossilCapacity = [];
-            fossilCapacityMap = new Map();
-        }
-        try {
-            loadingStatus.textContent = "Loading electricity demand data...";
-            electricityDemandData = await loadElectricityDemandData();
-            electricityDemandMap = new Map(electricityDemandData.map(row => [row.location_id, row]));
-        } catch (err) {
-            console.error("Electricity demand data load failed:", err);
-            electricityDemandData = [];
-            electricityDemandMap = new Map();
-        }
+        // NOTE: Population, fossil plants, and electricity data are now LAZY LOADED
+        // They will be fetched when the user switches to the Supply-Demand Matching view
+        // See: ensurePopulationModeDataLoaded(), ensureFossilDataLoaded(), ensureElectricityDataLoaded()
 
         loadingStatus.textContent = "Processing...";
         console.log("Loaded summary data. Rows:", summaryData.length);
@@ -2089,7 +2395,7 @@ function initUIEvents() {
     }
 }
 
-function updateViewMode(mode) {
+async function updateViewMode(mode) {
     currentViewMode = mode;
 
     // Update Tabs UI
@@ -2159,6 +2465,8 @@ function updateViewMode(mode) {
         legendLcoe.classList.remove('hidden');
         updateLcoeView();
     } else if (mode === 'population') {
+        // LAZY LOAD: Ensure population data is loaded before updating view
+        await ensurePopulationModeDataLoaded();
         legendPopulation.classList.remove('hidden');
         updatePopulationView();
         legendCapacity.classList.add('hidden');

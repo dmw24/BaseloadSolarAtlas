@@ -474,7 +474,7 @@ export function updatePopulationPolygons(popData, geojson, { overlayMode = 'none
     }
 }
 
-function capitalRecoveryFactor(rate, years) {
+export function capitalRecoveryFactor(rate, years) {
     if (years <= 0) return 0;
     if (rate === 0) return 1 / years;
     const pow = Math.pow(1 + rate, years);
@@ -1575,4 +1575,172 @@ export function setSampleLocationClickHandler(handler) {
             marker.on('click', () => handler({ ...marker.__sampleInfo }));
         }
     });
+}
+// ========== SUBSET MAP FUNCTIONS ==========
+
+export let subsetMap;
+let subsetVoronoiLayer;
+
+export async function initSubsetMap() {
+    if (subsetMap) {
+        setTimeout(() => subsetMap.invalidateSize(), 100);
+        return;
+    }
+
+    const container = document.getElementById('subset-map');
+    if (!container) return;
+
+    subsetMap = L.map('subset-map', {
+        zoomControl: true,
+        attributionControl: false,
+        zoomAnimation: false,  // Disable zoom animation to prevent SVG scale mismatch
+        fadeAnimation: false
+    }).setView([20, 0], 2);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        subdomains: 'abcd',
+        maxZoom: 19
+    }).addTo(subsetMap);
+
+    subsetMap.createPane('voronoi');
+    subsetMap.getPane('voronoi').style.zIndex = 400;
+
+    subsetVoronoiLayer = L.svg({ pane: 'voronoi' }).addTo(subsetMap);
+}
+
+export function renderSubsetMap(allData, subsetIds, getValue, getColor, layerType = 'population', getRadius = null, getTooltip = null, onPointHover = null, onPointOut = null) {
+    if (!subsetMap || !subsetVoronoiLayer) return;
+
+    // Clear existing
+    const svg = d3.select(subsetVoronoiLayer._container);
+    svg.selectAll("*").remove();
+
+    if (!allData || allData.length === 0) return;
+
+    // Common setup
+    const size = subsetMap.getSize();
+    const subsetSet = new Set(subsetIds);
+
+    const draw = () => {
+        try {
+            // Clear ALL SVG contents to prevent stale elements on zoom/pan
+            svg.selectAll("*").remove();
+
+            const size = subsetMap.getSize(); // update size in draw
+            if (size.x === 0 || size.y === 0) {
+                console.warn('[SubsetMap] Skipping draw - size is zero');
+                return;
+            }
+
+            // Check if we have data to render
+            if (!allData || allData.length === 0) {
+                console.warn('[SubsetMap] Skipping draw - no data');
+                return;
+            }
+
+            // Map points to pixel coords
+
+            if (layerType === 'plants') {
+                // Render Points (Circles)
+                const subsetData = allData.filter(d => subsetSet.has(d.location_id));
+
+                const circles = svg.selectAll("circle")
+                    .data(subsetData)
+                    .enter()
+                    .append("circle")
+                    .attr("cx", d => subsetMap.latLngToLayerPoint([d.latitude, d.longitude]).x)
+                    .attr("cy", d => subsetMap.latLngToLayerPoint([d.latitude, d.longitude]).y)
+                    .attr("r", d => getRadius ? getRadius(d) : 4)
+                    .attr("fill", d => getColor(getValue(d)))
+                    .attr("fill-opacity", 0.3)
+                    .attr("stroke", "none")
+                    .attr("stroke-width", 0)
+                    .style("pointer-events", "auto");
+
+                if (onPointHover || onPointOut) {
+                    circles
+                        .on("mouseover", (e, d) => onPointHover && onPointHover(e, d))
+                        .on("mouseout", (e, d) => onPointOut && onPointOut(e, d));
+                } else {
+                    circles.append("title")
+                        .text(d => getTooltip ? getTooltip(d) : `Value: ${formatNumber(getValue(d), 2)}`);
+                }
+
+            } else {
+                // Render Voronoi (Clipped)
+
+                // 1. Setup Clip Path
+                const transform = d3.geoTransform({
+                    point: function (x, y) {
+                        const point = subsetMap.latLngToLayerPoint(new L.LatLng(y, x));
+                        this.stream.point(point.x, point.y);
+                    },
+                });
+                const path = d3.geoPath().projection(transform);
+
+                if (worldGeoJSON) {
+                    const defs = svg.append("defs");
+                    defs.append("clipPath")
+                        .attr("id", "clip-land-subset")
+                        .append("path")
+                        .datum(worldGeoJSON)
+                        .attr("d", path);
+                }
+
+                const buffer = Math.max(size.x, size.y);
+                const bounds = [-buffer, -buffer, size.x + buffer, size.y + buffer];
+
+                const points = allData.map(d => {
+                    const p = subsetMap.latLngToLayerPoint([d.latitude, d.longitude]);
+                    return [p.x, p.y];
+                });
+
+                const delaunay = d3.Delaunay.from(points);
+                const voronoi = delaunay.voronoi(bounds);
+
+                // Pre-filter data indices for the subset
+                const pathsData = [];
+                allData.forEach((d, i) => {
+                    if (subsetSet.has(d.location_id)) {
+                        pathsData.push({ d, i });
+                    }
+                });
+
+                // 2. Render paths with clip-path
+                svg.append("g")
+                    .attr("clip-path", worldGeoJSON ? "url(#clip-land-subset)" : null)
+                    .selectAll("path")
+                    .data(pathsData)
+                    .enter()
+                    .append("path")
+                    .attr("d", p => voronoi.renderCell(p.i))
+                    .attr("fill", p => getColor(getValue(p.d)))
+                    .attr("fill-opacity", 0.9)
+                    .attr("stroke", "none")
+                    .style("pointer-events", "auto")
+                    .append("title")
+                    .text(p => {
+                        const val = getValue(p.d);
+                        return `Value: ${formatNumber(val, 2)}`;
+                    });
+            }
+        } catch (e) {
+            console.error('[SubsetMap] Error in draw:', e);
+        }
+    };
+
+    draw();
+
+    // update on move/resize/zoom - need all these for proper SVG sync
+    subsetMap.off('moveend');
+    subsetMap.off('resize');
+    subsetMap.off('zoomend');
+    subsetMap.off('viewreset');
+    subsetMap.off('zoom');
+
+    subsetMap.on('moveend', draw);
+    subsetMap.on('resize', draw);
+    subsetMap.on('zoomend', draw);
+    subsetMap.on('viewreset', draw);
+    subsetMap.on('zoom', draw);
 }

@@ -10,6 +10,32 @@ let selectedSeason = 'spring';
 let selectedSampleLocation = null;
 let sampleChart = null;
 let hasLoadedSamples = false;
+let chartJsLoaded = false;
+
+// Cache for loaded sample data to avoid re-downloading
+// Key format: "s{solarGw}_b{battGwh}" -> {data: [...], enriched: boolean}
+const sampleDataCache = new Map();
+let cachedSummaryMap = null; // Cached coordinate map for enrichment
+
+// Dynamic Chart.js loader for samples module
+async function ensureChartJsLoaded() {
+    if (chartJsLoaded || window.Chart) {
+        chartJsLoaded = true;
+        return;
+    }
+
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/chart.js';
+        script.onload = () => {
+            chartJsLoaded = true;
+            console.log('Chart.js loaded dynamically (samples)');
+            resolve();
+        };
+        script.onerror = () => reject(new Error('Failed to load Chart.js'));
+        document.head.appendChild(script);
+    });
+}
 
 function resetSampleChartState(message = 'Pick a location to view the breakdown.', clearSelection = true) {
     if (clearSelection) {
@@ -78,6 +104,7 @@ export async function loadSampleWeekData(solarGw, battGwh, summaryData) {
         stopPlayback();
     }
 
+    const cacheKey = `s${solarGw}_b${battGwh}`;
     console.log(`Loading sample week data for Solar ${solarGw} MW, Battery ${battGwh} MWh`);
     selectedSeason = weekSelect.value;
 
@@ -93,44 +120,55 @@ export async function loadSampleWeekData(solarGw, battGwh, summaryData) {
     }
 
     try {
-        // Load sample data for this configuration
-        const { loadSample } = await import('./data.js');
-        const data = await loadSample(solarGw, battGwh);
+        let data;
 
-        console.log('Sample data loaded:', data);
-        console.log('Data length:', data?.length);
-        console.log('First row structure:', data[0]);
+        // Check cache first - avoid re-downloading if we already have this config
+        if (sampleDataCache.has(cacheKey)) {
+            console.log(`Using cached sample data for ${cacheKey}`);
+            data = sampleDataCache.get(cacheKey);
+        } else {
+            // Load sample data for this configuration
+            console.log(`Downloading sample data for ${cacheKey}...`);
+            const { loadSample } = await import('./data.js');
+            data = await loadSample(solarGw, battGwh);
 
-        if (!data || data.length === 0) {
-            console.warn('No sample data available');
-            sampleWeekData = null;
-            weekSelect.innerHTML = '<option>No data available</option>';
-            hideSampleChart();
-            return;
-        }
+            console.log('Sample data loaded:', data);
+            console.log('Data length:', data?.length);
 
-        // Merge lat/lon from summary data into sample data
-        // Summary data has coordinates, sample data doesn't
-        const summaryMap = new Map();
-        if (summaryData && summaryData.length > 0) {
-            summaryData.forEach(row => {
-                summaryMap.set(row.location_id, {
-                    latitude: row.latitude,
-                    longitude: row.longitude
-                });
-            });
-        }
-
-        // Add coordinates to each sample row
-        data.forEach(row => {
-            const coords = summaryMap.get(row.location_id);
-            if (coords) {
-                row.latitude = coords.latitude;
-                row.longitude = coords.longitude;
+            if (!data || data.length === 0) {
+                console.warn('No sample data available');
+                sampleWeekData = null;
+                weekSelect.innerHTML = '<option>No data available</option>';
+                hideSampleChart();
+                return;
             }
-        });
 
-        console.log('Merged coordinates. Sample row with coords:', data.find(d => d.latitude && d.longitude));
+            // Build summary map once and cache it
+            if (!cachedSummaryMap && summaryData && summaryData.length > 0) {
+                cachedSummaryMap = new Map();
+                summaryData.forEach(row => {
+                    cachedSummaryMap.set(row.location_id, {
+                        latitude: row.latitude,
+                        longitude: row.longitude
+                    });
+                });
+            }
+
+            // Add coordinates to each sample row using cached summary map
+            if (cachedSummaryMap) {
+                data.forEach(row => {
+                    const coords = cachedSummaryMap.get(row.location_id);
+                    if (coords) {
+                        row.latitude = coords.latitude;
+                        row.longitude = coords.longitude;
+                    }
+                });
+            }
+
+            console.log('Merged coordinates. Caching for future use.');
+            // Cache the enriched data
+            sampleDataCache.set(cacheKey, data);
+        }
 
         // Store all data - it's already organized by location and season
         sampleWeekData = data;
@@ -145,8 +183,6 @@ export async function loadSampleWeekData(solarGw, battGwh, summaryData) {
         weekSelect.innerHTML = seasons
             .map(season => `<option value="${season}">${season.charAt(0).toUpperCase() + season.slice(1)}</option>`)
             .join('');
-
-        console.log('Week selector populated');
 
         // Choose desired season
         let desiredSeason = previousSeason;
@@ -418,7 +454,7 @@ function handleSampleLocationSelect(location) {
     renderSampleChartForSelected(true);
 }
 
-function renderSampleChartForSelected(forceShow = true) {
+async function renderSampleChartForSelected(forceShow = true) {
     if (!sampleWeekData || !selectedSampleLocation) return;
     const season = selectedSeason || weekSelect.value;
     if (!season) return;
@@ -497,6 +533,9 @@ function renderSampleChartForSelected(forceShow = true) {
             : '--';
         sampleChartLocation.textContent = `ID ${selectedSampleLocation.location_id} (${lat}, ${lon}) • ${seasonLabel}`;
     }
+    // Dynamically load Chart.js if not already loaded
+    await ensureChartJsLoaded();
+
     const ChartJS = window.Chart;
     if (!sampleChartCanvas || !ChartJS) {
         if (sampleChartStatus) {

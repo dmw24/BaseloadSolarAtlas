@@ -2,6 +2,19 @@
 <html lang="en">
 
 <head>
+    <!-- DNS Prefetch & Preconnect for CDN domains -->
+    <link rel="dns-prefetch" href="https://cdn.tailwindcss.com">
+    <link rel="dns-prefetch" href="https://unpkg.com">
+    <link rel="dns-prefetch" href="https://d3js.org">
+    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <!-- Preload critical resources -->
+    <link rel="preload" href="js/parquet_wasm_bg.wasm" as="fetch" crossorigin>
+    <link rel="preload" href="data/simulation_results_summary.parquet" as="fetch" crossorigin>
+    <link rel="preload" href="css/style.css" as="style">
+
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Baseload Solar Atlas</title>
@@ -34,7 +47,7 @@
     <!-- Custom CSS -->
     <link rel="stylesheet" href="css/style.css">
 
-    <!-- Fonts -->
+    <!-- Fonts (preconnect already added above) -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0"
         rel="stylesheet" />
@@ -673,7 +686,31 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script src="https://d3js.org/d3.v7.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Chart.js loaded on-demand when charts view is opened (see app.js) -->
+
+    <!-- Subset Map Modal -->
+    <div id="subset-map-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" id="subset-map-backdrop"></div>
+        <div
+            class="relative bg-surface border border-white/10 rounded-2xl shadow-2xl w-full max-w-5xl h-[80vh] flex flex-col overflow-hidden">
+            <div class="flex justify-between items-center p-4 border-b border-white/10 bg-surface">
+                <h2 id="subset-map-title" class="text-lg font-semibold text-white">Subset Distribution</h2>
+                <button id="close-subset-map" class="text-gray-400 hover:text-white transition-colors">
+                    <span class="material-symbols-outlined">close</span>
+                </button>
+            </div>
+            <div class="relative flex-1 bg-black">
+                <div id="subset-map" class="absolute inset-0 z-0"></div>
+                <!-- Simple legend for subset map -->
+                <div
+                    class="absolute bottom-4 right-4 z-[1000] bg-surface/90 backdrop-blur pointer-events-auto rounded-lg p-3 border border-white/10">
+                    <div class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-1"
+                        id="subset-legend-title">Value</div>
+                    <div class="text-xs text-white" id="subset-legend-range">--</div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Application Logic -->
     <script type="module" src="js/app.js"></script>

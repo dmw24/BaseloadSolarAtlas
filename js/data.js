@@ -103,7 +103,32 @@ export async function loadVoronoiGemCapacityCsv() {
     }));
 }
 
-export async function loadSample(solarGw, battGwh) {
+class SampleTableWrapper {
+    constructor(rows) {
+        this.numRows = rows.length;
+        this._seasonIndex = new Map();
+        rows.forEach(row => {
+            const key = typeof row.season === 'string' ? row.season.toLowerCase() : String(row.season || '');
+            if (!this._seasonIndex.has(key)) {
+                this._seasonIndex.set(key, []);
+            }
+            this._seasonIndex.get(key).push(row);
+        });
+        this._seasons = Array.from(this._seasonIndex.keys());
+    }
+
+    getSeasons() {
+        return this._seasons;
+    }
+
+    getRowsForSeason(season) {
+        if (!season) return [];
+        const key = season.toString().toLowerCase();
+        return this._seasonIndex.get(key) || [];
+    }
+}
+
+async function readSampleArrowTable(solarGw, battGwh) {
     await initWasm();
 
     const filename = `samples_s${solarGw}_b${battGwh}.parquet`;
@@ -114,19 +139,38 @@ export async function loadSample(solarGw, battGwh) {
     }
 
     const buffer = await response.arrayBuffer();
-    const wasm = await import('./parquet_wasm.js');
     const { tableFromIPC } = await import('./apache-arrow.js');
 
-    const wasmTable = wasm.readParquet(new Uint8Array(buffer));
+    const wasm = await import('./parquet_wasm.js');
+    const wasmTable = (wasm.readParquet || readParquet)(new Uint8Array(buffer));
     const table = wasmTable.intoIPCStream();
-    const arrowTable = tableFromIPC(table);
+    return tableFromIPC(table);
+}
 
-    const data = [];
+function materializeSampleRows(arrowTable) {
+    const rows = [];
     for (const row of arrowTable) {
-        data.push(row.toJSON());
+        const json = row.toJSON();
+        const season = typeof json.season === 'string' ? json.season.toLowerCase() : '';
+        rows.push({ ...json, season });
     }
+    return rows;
+}
 
-    return data;
+export async function loadSampleColumnar(solarGw, battGwh) {
+    const arrowTable = await readSampleArrowTable(solarGw, battGwh);
+    const rows = materializeSampleRows(arrowTable);
+    return new SampleTableWrapper(rows);
+}
+
+export async function loadSample(solarGw, battGwh) {
+    const wrapper = await loadSampleColumnar(solarGw, battGwh);
+    const rows = [];
+    wrapper.getSeasons().forEach(season => {
+        rows.push(...wrapper.getRowsForSeason(season));
+    });
+
+    return rows;
 }
 
 export async function loadElectricityDemandData() {
